@@ -1,3 +1,5 @@
+find_package(LibYaml REQUIRED)
+
 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/simple_loading.h
                           ${CMAKE_CURRENT_BINARY_DIR}/simple_loading.c
         COMMAND libyaml_mapper ${CMAKE_CURRENT_SOURCE_DIR}/simple/simple.h
