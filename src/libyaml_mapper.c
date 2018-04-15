@@ -514,8 +514,8 @@ int main(const int argc, const char* argv[]) {
 
   for (int i = 1; i < argc; ++i) {
     if (argv[i][0] == '-') {
-      if (i == argc - 1) {
-        fprintf(stderr, "switch %s is missing value!", argv[i]);
+      if (i == argc - 1 && argv[i][1] != 'h') {
+        fprintf(stderr, "switch %s is missing value!\n", argv[i]);
         usage(argv[0]);
         return 1;
       }

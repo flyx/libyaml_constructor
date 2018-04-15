@@ -1,3 +1,3 @@
-add_executable(generator generator.c)
-target_include_directories(generator PRIVATE ${LibClang_INCLUDE_DIRS})
-target_link_libraries(generator ${LibClang_LIBRARIES})
+add_executable(libyaml_mapper libyaml_mapper.c)
+target_include_directories(libyaml_mapper PRIVATE ${LibClang_INCLUDE_DIRS})
+target_link_libraries(libyaml_mapper ${LibClang_LIBRARIES})

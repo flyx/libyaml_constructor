@@ -1,6 +1,6 @@
 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/simple_loading.h
                           ${CMAKE_CURRENT_BINARY_DIR}/simple_loading.c
-        COMMAND generator ${CMAKE_CURRENT_SOURCE_DIR}/simple/simple.h
+        COMMAND libyaml_mapper ${CMAKE_CURRENT_SOURCE_DIR}/simple/simple.h
         DEPENDS simple/simple.h
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
