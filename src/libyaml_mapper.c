@@ -38,6 +38,7 @@ typedef struct dea_node_struct dea_node_t;
 struct dea_node_struct {
   int followers[256];
   char* loader_implementation;
+  const char* loader_item_name;
 };
 
 #define MAX_NODES 2048
@@ -65,10 +66,11 @@ static process_result_t enter_struct_item(walker_t*, CXCursor, exit_process_t*);
 static process_result_t enter_list_item(walker_t*, CXCursor, exit_process_t*);
 static process_result_t enter_enum_item(walker_t*, CXCursor, exit_process_t*);
 
-static inline dea_node_t* new_node() {
+static inline dea_node_t* new_node(const char* name) {
   dea_node_t* const val = malloc(sizeof(dea_node_t));
   memset(val->followers, -1, sizeof(val->followers));
   val->loader_implementation = NULL;
+  val->loader_item_name = name;
   return val;
 }
 
@@ -80,7 +82,7 @@ static inline level_t top_level(CXCursor parent) {
 static inline level_t struct_level(CXCursor parent) {
   dea_t* const dea = malloc(sizeof(dea_t));
   dea->count = 1;
-  dea->nodes[0] = new_node();
+  dea->nodes[0] = new_node(NULL);
   const level_t ret = {parent, {}, &enter_struct_item, NULL, false, dea};
   return ret;
 }
@@ -88,7 +90,7 @@ static inline level_t struct_level(CXCursor parent) {
 static inline level_t enum_level(CXCursor parent) {
   dea_t* const dea = malloc(sizeof(dea_t));
   dea->count = 1;
-  dea->nodes[0] = new_node();
+  dea->nodes[0] = new_node(NULL);
   const level_t ret = {parent, {}, &enter_enum_item, NULL, false, dea};
   return ret;
 }
@@ -188,7 +190,7 @@ static dea_node_t* include_name(dea_t* const dea, const char* name) {
         return NULL;
       }
       cur_node->followers[(int)(*cur_char)] = node_id;
-      dea->nodes[node_id] = new_node();
+      dea->nodes[node_id] = new_node(name);
     }
     cur_node = dea->nodes[node_id];
   }
@@ -444,14 +446,26 @@ static void put_control_table(walker_t* const walker, const dea_t* const dea) {
   fputs("  };\n", walker->loader_out);
 }
 
-static void process_nodes(walker_t* const walker,
-                          const dea_t* const dea) {
+static void process_struct_nodes(walker_t* const walker,
+                                 const dea_t* const dea) {
+  size_t index = 0;
   for (size_t i = 0; i < dea->count; i++) {
     if (dea->nodes[i]->loader_implementation != NULL) {
-      fprintf(walker->loader_out, "      case %zu:\n        ", i);
+      fprintf(walker->loader_out,
+              "      case %zu:\n"
+              "        if (found[%zu]) {\n"
+              "          size_t escaped_len;\n"
+              "          char* escaped = escape(name, &escaped_len);\n"
+              "          ret = malloc(16 + escaped_len);\n"
+              "          sprintf(ret, \"duplicate key: %%s\", escaped);\n"
+              "        } else {\n"
+              "          found[%zu] = true;\n"
+              "          ", i, index, index);
+      index++;
       fputs(dea->nodes[i]->loader_implementation, walker->loader_out);
       free(dea->nodes[i]->loader_implementation);
-      fputs("        break;\n", walker->loader_out);
+      fputs("          }\n"
+            "          break;\n", walker->loader_out);
     }
     free(dea->nodes[i]);
   }
@@ -468,8 +482,27 @@ static process_result_t leave_struct(walker_t* const walker,
         "  yaml_event_t key;\n"
         "  yaml_parser_parse(parser, &key);\n"
         "  char* ret = NULL;\n"
-        /*"  bool found[] = {", walker->loader_out);
-  fputs(*/"  while(key.type != YAML_MAPPING_END_EVENT) {\n"
+        "  bool found[] = {", walker->loader_out);
+  bool first = true;
+  for (size_t i = 0; i < dea->count; i++) {
+    if (dea->nodes[i]->loader_implementation != NULL) {
+      if (first) first = false;
+      else fputs(", ", walker->loader_out);
+      fputs("false", walker->loader_out);
+    }
+  }
+  fputs("};\n"
+        "  static const char* names[] = {", walker->loader_out);
+  first = true;
+  for (size_t i = 0; i < dea->count; i++) {
+    if (dea->nodes[i]->loader_implementation != NULL) {
+      if (first) first = false;
+      else fputs(", ", walker->loader_out);
+      fprintf(walker->loader_out, "\"%s\"", dea->nodes[i]->loader_item_name);
+    }
+  }
+  fputs("};\n"
+        "  while(key.type != YAML_MAPPING_END_EVENT) {\n"
         "    if (key.type != YAML_SCALAR_EVENT) {\n"
         "      ret = wrong_event_error(YAML_SCALAR_EVENT, key.type);\n"
         "      break;\n"
@@ -478,12 +511,12 @@ static process_result_t leave_struct(walker_t* const walker,
         "(const char*)key.data.scalar.value);\n"
         "    yaml_event_t event;\n"
         "    yaml_parser_parse(parser, &event);\n"
+        "    const char* const name = (const char*)key.data.scalar.value;\n"
         "    switch(result) {\n", walker->loader_out);
-  process_nodes(walker, dea);
+  process_struct_nodes(walker, dea);
   fputs("      default: {\n"
         "          size_t escaped_len;\n"
-        "          char* escaped = escape((const char*)key.data.scalar.value, "
-        "&escaped_len);\n"
+        "          char* escaped = escape(name, &escaped_len);\n"
         "          ret = malloc(16 + escaped_len);\n"
         "          sprintf(ret, \"unknown field: %s\", escaped);\n"
         "          free(escaped);\n"
@@ -496,10 +529,33 @@ static process_result_t leave_struct(walker_t* const walker,
         "    yaml_parser_parse(parser, &key);\n"
         "  }\n"
         "  yaml_event_delete(&key);\n"
+        "  for (size_t i = 0; i < sizeof(found); i++) {\n"
+        "    if (!found[i]) {\n"
+        "      const size_t name_len = strlen(names[i]);\n"
+        "      ret = malloc(17 + name_len);\n"
+        "      sprintf(ret, \"missing value for field \\\"%s\\\"\", names[i]);\n"
+        "      break;\n"
+        "    }\n"
+        "  }\n"
         "  return ret;\n"
         "}\n\n", walker->loader_out);
   free(dea);
   return okay;
+}
+
+static void process_enum_nodes(walker_t* const walker,
+                                 const dea_t* const dea) {
+  for (size_t i = 0; i < dea->count; i++) {
+    if (dea->nodes[i]->loader_implementation != NULL) {
+      fprintf(walker->loader_out,
+              "      case %zu:\n"
+              "        ", i);
+      fputs(dea->nodes[i]->loader_implementation, walker->loader_out);
+      free(dea->nodes[i]->loader_implementation);
+      fputs("          break;\n", walker->loader_out);
+    }
+    free(dea->nodes[i]);
+  }
 }
 
 static process_result_t leave_enum(walker_t* const walker,
@@ -514,7 +570,7 @@ static process_result_t leave_enum(walker_t* const walker,
         "(const char*)cur->data.scalar.value);\n"
         "  char* ret = NULL;\n"
         "  switch(result) {\n", walker->loader_out);
-  process_nodes(walker, dea);
+  process_enum_nodes(walker, dea);
   fputs("    default: {\n"
         "      size_t escaped_len;\n"
         "      char* escaped = escape((const char*)cur->data.scalar.value, "
@@ -753,6 +809,7 @@ int main(const int argc, const char* argv[]) {
   }
   fprintf(walker.loader_out,
           "#include <loader_common.h>\n"
+          "#include <stdbool.h>\n"
           "#include \"%s\"\n", output_header_name);
   
   clang_visitChildren(cursor, &visitor, &walker);
