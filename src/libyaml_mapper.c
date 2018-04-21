@@ -11,11 +11,15 @@ typedef struct walker_struct walker_t;
 typedef enum {okay, error} process_result_t;
 
 typedef process_result_t
-    (*process_t)(walker_t* const, CXCursor const cursor);
+    (*exit_process_t)(walker_t* const, CXCursor const);
+
+typedef process_result_t
+    (*enter_process_t)(walker_t* const, CXCursor const cursor, exit_process_t*);
 
 typedef struct {
   CXCursor parent, self;
-  process_t enter, leave;
+  enter_process_t enter;
+  exit_process_t leave;
   bool entered;
   void* data;
 } level_t;
@@ -48,27 +52,12 @@ typedef struct {
   CXType data_type;
 } list_info_t;
 
-static process_result_t enter_struct(walker_t* walker,
-                                   CXCursor cursor);
-static process_result_t leave_struct(walker_t* walker,
-                                   CXCursor cursor);
-static process_result_t leave_list(walker_t* walker, CXCursor cursor);
+static process_result_t enter_toplevel(walker_t*, CXCursor, exit_process_t*);
+static process_result_t leave_struct(walker_t*, CXCursor);
+static process_result_t leave_list(walker_t*, CXCursor);
 
-static process_result_t enter_field(walker_t* walker,
-                                  CXCursor cursor);
-static process_result_t leave_field(walker_t* walker,
-                                  CXCursor cursor);
-
-static process_result_t enter_list_field(walker_t* walker,
-                                         CXCursor cursor);
-static process_result_t leave_list_field(walker_t* walker,
-                                         CXCursor cursor);
-
-/*
-static process_result_t enter_typeref(walker_t* const walker,
-                                      CXCursor const cursor);
-static process_result_t leave_typeref(walker_t* const walker,
-                                      CXCursor const cursor);*/
+static process_result_t enter_struct_item(walker_t*, CXCursor, exit_process_t*);
+static process_result_t enter_list_item(walker_t*, CXCursor, exit_process_t*);
 
 static inline dea_node_t* new_node() {
   dea_node_t* const val = malloc(sizeof(dea_node_t));
@@ -77,34 +66,28 @@ static inline dea_node_t* new_node() {
   return val;
 }
 
-static inline level_t struct_level(CXCursor parent) {
-  const level_t ret = {parent, {}, &enter_struct, &leave_struct, false, NULL};
+static inline level_t top_level(CXCursor parent) {
+  const level_t ret = {parent, {}, &enter_toplevel, NULL, false, NULL};
   return ret;
 }
 
-static inline level_t field_level(CXCursor parent) {
+static inline level_t struct_level(CXCursor parent) {
   dea_t* const dea = malloc(sizeof(dea_t));
   dea->count = 1;
   dea->nodes[0] = new_node();
-  const level_t ret = {parent, {}, &enter_field, &leave_field, false, dea};
+  const level_t ret = {parent, {}, &enter_struct_item, NULL, false, dea};
   return ret;
 }
 
-static inline level_t list_field_level(CXCursor parent) {
+static inline level_t list_level(CXCursor parent) {
   list_info_t* const list_info = malloc(sizeof(list_info_t));
   list_info->seen_capacity = false;
   list_info->seen_count = false;
   list_info->data_type.kind = CXType_Unexposed;
   const level_t ret =
-      {parent, {}, &enter_list_field, &leave_list_field, false, list_info};
+      {parent, {}, &enter_list_item, NULL, false, list_info};
   return ret;
 }
-
-/*
-static inline level_t typeref_level(CXCursor parent) {
-  const level_t ret = {parent, {}, &enter_typeref, &leave_typeref, false};
-  return ret;
-}*/
 
 static inline level_t* level(walker_t* const walker) {
   return &walker->levels[walker->cur_level];
@@ -150,8 +133,10 @@ static const char* raw_name(CXType type) {
   else return full_name;
 }
 
-static process_result_t enter_field(walker_t* const walker,
-                                    CXCursor const cursor) {
+static process_result_t enter_struct_item(walker_t* const walker,
+                                          CXCursor const cursor,
+                                          exit_process_t* const exit_process) {
+  *exit_process = NULL;
   const enum CXCursorKind kind = clang_getCursorKind(cursor);
   switch (kind) {
     case CXCursor_StructDecl:
@@ -233,15 +218,10 @@ static process_result_t enter_field(walker_t* const walker,
   return ret;
 }
 
-static process_result_t leave_field(walker_t* const walker,
-                                    CXCursor const cursor) {
-  (void)walker; (void)cursor;
-  // nothing to be done right now
-  return okay;
-}
-
-static process_result_t enter_list_field(walker_t* const walker,
-                                         CXCursor const cursor) {
+static process_result_t enter_list_item(walker_t* const walker,
+                                        CXCursor const cursor,
+                                        exit_process_t* exit_process) {
+  *exit_process = NULL;
   list_info_t* list_info = (list_info_t*) level(walker)->data;
   const enum CXCursorKind kind = clang_getCursorKind(cursor);
   switch (kind) {
@@ -291,15 +271,10 @@ static process_result_t enter_list_field(walker_t* const walker,
   }
   return okay;
 }
-static process_result_t leave_list_field(walker_t* const walker,
-                                         CXCursor const cursor) {
-  (void)walker; (void)cursor;
-  // nothing to do here right now
-  return okay;
-}
 
-static process_result_t enter_struct(walker_t* const walker,
-                                     CXCursor const cursor) {
+static process_result_t enter_toplevel(walker_t* const walker,
+                                       CXCursor const cursor,
+                                       exit_process_t* exit_process) {
   const enum CXCursorKind kind = clang_getCursorKind(cursor);
   if (kind != CXCursor_StructDecl) {
     fprintf(stderr, "Unexpected top-level item: %s",
@@ -311,8 +286,8 @@ static process_result_t enter_struct(walker_t* const walker,
   process_result_t ret;
   if (annotation != NULL) {
     if (!strcmp(annotation, "list")) {
-      level(walker)->leave = &leave_list;
-      push_level(walker, list_field_level(cursor));
+      *exit_process = &leave_list;
+      push_level(walker, list_level(cursor));
       ret = okay;
     } else {
       fprintf(stderr, "Unknown annotation: %s", annotation);
@@ -320,7 +295,8 @@ static process_result_t enter_struct(walker_t* const walker,
     }
     free(annotation);
   } else {
-    push_level(walker, field_level(cursor));
+    *exit_process = &leave_struct;
+    push_level(walker, struct_level(cursor));
     ret = okay;
   }
   CXType t = clang_getCanonicalType(clang_getCursorType(cursor));
@@ -448,7 +424,6 @@ static process_result_t leave_list(walker_t* const walker,
             complete_type, complete_type, raw_name(list_info->data_type));
   }
   free(list_info);
-  level(walker)->leave = &leave_struct;
   return ret;
 }
 
@@ -460,11 +435,12 @@ enum CXChildVisitResult visitor(CXCursor cursor, CXCursor parent,
   walker_t* walker = (walker_t*) client_data;
   if (walker->cur_level == -1) {
     walker->cur_level = 0;
-    walker->levels[0] = struct_level(parent);
+    walker->levels[0] = top_level(parent);
   }
   if (level(walker)->entered) {
     do {
-      if ((level(walker)->leave)(walker, level(walker)->self) != okay) {
+      if (level(walker)->leave &&
+          (level(walker)->leave)(walker, level(walker)->self) != okay) {
         walker->got_errors = true;
         return CXChildVisit_Break;
       }
@@ -477,7 +453,7 @@ enum CXChildVisitResult visitor(CXCursor cursor, CXCursor parent,
   
   level(walker)->entered = true;
   level(walker)->self = cursor;
-  if ((*level(walker)->enter)(walker, cursor) != okay) {
+  if ((*level(walker)->enter)(walker, cursor, &level(walker)->leave) != okay) {
     walker->got_errors = true;
     return CXChildVisit_Break;
   }
@@ -626,7 +602,8 @@ int main(const int argc, const char* argv[]) {
   clang_visitChildren(cursor, &visitor, &walker);
   if (!walker.got_errors) {
     while (walker.cur_level >= 0) {
-      (*walker.levels[walker.cur_level].leave)(&walker, level(&walker)->self);
+      exit_process_t exit_process = level(&walker)->leave;
+      if (exit_process) (*exit_process)(&walker, level(&walker)->self);
       --walker.cur_level;
     }
 
