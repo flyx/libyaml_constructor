@@ -20,15 +20,15 @@ struct person {
 };
 
 //!list
-struct person_list {
+typedef struct person_list_s {
   struct person* data;
   size_t count;
   size_t capacity;
-};
+} person_list;
 
 struct root {
   char symbol;
-  struct person_list people;
+  person_list people;
 };
 
 #endif

@@ -58,6 +58,7 @@ typedef struct {
 } annotation_t;
 
 static process_result_t enter_toplevel(walker_t*, CXCursor, exit_process_t*);
+static process_result_t enter_typedef(walker_t*, CXCursor, exit_process_t*);
 static process_result_t leave_struct(walker_t*, CXCursor);
 static process_result_t leave_list(walker_t*, CXCursor);
 static process_result_t leave_enum(walker_t*, CXCursor);
@@ -76,6 +77,11 @@ static inline dea_node_t* new_node(const char* name) {
 
 static inline level_t top_level(CXCursor parent) {
   const level_t ret = {parent, {}, &enter_toplevel, NULL, false, NULL};
+  return ret;
+}
+
+static inline level_t typedef_level(CXCursor parent, const char* name) {
+  const level_t ret = {parent, {}, &enter_typedef, NULL, false, (void*)name};
   return ret;
 }
 
@@ -172,8 +178,8 @@ static void free_annotation(annotation_t annotation) {
   free(annotation.name);
 }
 
-static const char* raw_name(CXType type) {
-  const char* full_name = clang_getCString(clang_getTypeSpelling(type));
+static const char* raw_name(CXString value) {
+  const char* full_name = clang_getCString(value);
   const char* space = strchr(full_name, ' ');
   if (space != NULL) return space + 1;
   else return full_name;
@@ -259,13 +265,13 @@ static process_result_t enter_struct_item(walker_t* const walker,
       case CXType_Record:
         // TODO: ensure a loader for this record exists
         cur_node->loader_implementation =
-            new_deserialization(name, raw_name(t));
+            new_deserialization(name, raw_name(clang_getTypeSpelling(t)));
         ret = okay;
         break;
       case CXType_Enum:
         // TODO: ensure a loader for this enum exists
         cur_node->loader_implementation =
-            new_deserialization(name, raw_name(t));
+            new_deserialization(name, raw_name(clang_getTypeSpelling(t)));
         ret = okay;
         break;
       default:
@@ -405,31 +411,63 @@ static process_result_t enter_enum_decl(walker_t* const walker,
   return okay;
 }
 
-static process_result_t enter_toplevel(walker_t* const walker,
-                                       CXCursor const cursor,
-                                       exit_process_t* exit_process) {
-  CXType t = clang_getCanonicalType(clang_getCursorType(cursor));
-  const char* name = raw_name(t);
-  if (!strcmp(name, walker->rootName)) {
+static process_result_t enter_def_level(walker_t* const walker,
+                                        CXCursor const cursor,
+                                        exit_process_t* exit_process,
+                                        const char* typedef_name) {
+  CXType t = clang_getCursorType(cursor);
+  const char* simple_name = raw_name(clang_getTypeSpelling(t));
+  if (!strcmp(simple_name, walker->rootName)) {
     walker->rootType = t;
+  }
+
+  process_result_t ret;
+  const char* actual_name = clang_getCString(clang_getCursorSpelling(cursor));
+  if (actual_name[0] == '\0') {
+    // ignore anonymous struct/enum at top level
+    // (probably a typedef, will be handled there)
+    *exit_process = NULL;
+    return okay;
+  }
+
+  const enum CXCursorKind kind = clang_getCursorKind(cursor);
+  switch(kind) {
+    case CXCursor_StructDecl:
+      ret = enter_struct_decl(walker, cursor, exit_process);
+      break;
+    case CXCursor_EnumDecl:
+      ret = enter_enum_decl(walker, cursor, exit_process);
+      break;
+    case CXCursor_TypedefDecl:
+      push_level(walker, typedef_level(cursor, actual_name));
+      *exit_process = NULL;
+      return okay;
+    default:
+      fprintf(stderr, "Unexpected top-level item: %s\n",
+              clang_getCString(clang_getCursorKindSpelling(kind)));
+      return error;
   }
 
   fprintf(walker->loader_out,
           "static char* construct_%s(%s * const value, "
           "yaml_parser_t* const parser, yaml_event_t* cur) {\n",
-          name, clang_getCString(clang_getTypeSpelling(t)));
+          typedef_name ? typedef_name : simple_name,
+          typedef_name ? typedef_name :
+              clang_getCString(clang_getTypeSpelling(t)));
+  return ret;
+}
 
-  const enum CXCursorKind kind = clang_getCursorKind(cursor);
-  switch(kind) {
-    case CXCursor_StructDecl:
-      return enter_struct_decl(walker, cursor, exit_process);
-    case CXCursor_EnumDecl:
-      return enter_enum_decl(walker, cursor, exit_process);
-    default:
-      fprintf(stderr, "Unexpected top-level item: %s",
-              clang_getCString(clang_getCursorKindSpelling(kind)));
-      return error;
-  }
+static process_result_t enter_toplevel(walker_t* const walker,
+                                       CXCursor const cursor,
+                                       exit_process_t* exit_process) {
+  return enter_def_level(walker, cursor, exit_process, NULL);
+}
+
+static process_result_t enter_typedef(walker_t* const walker,
+                                      CXCursor const cursor,
+                                      exit_process_t* exit_process) {
+  return enter_def_level(walker, cursor, exit_process,
+                         (const char*)level(walker)->data);
 }
 
 static void put_control_table(walker_t* const walker, const dea_t* const dea) {
@@ -633,7 +671,8 @@ static process_result_t leave_list(walker_t* const walker,
             "  yaml_event_delete(&event);\n"
             "  return NULL;\n"
             "}\n",
-            complete_type, complete_type, raw_name(list_info->data_type));
+            complete_type, complete_type,
+            raw_name(clang_getTypeSpelling(list_info->data_type)));
   }
   free(list_info);
   return ret;
@@ -813,51 +852,52 @@ int main(const int argc, const char* argv[]) {
           "#include \"%s\"\n", output_header_name);
   
   clang_visitChildren(cursor, &visitor, &walker);
-  if (!walker.got_errors) {
-    while (walker.cur_level >= 0) {
-      exit_process_t exit_process = level(&walker)->leave;
-      if (exit_process) (*exit_process)(&walker, level(&walker)->self);
-      --walker.cur_level;
-    }
+  if (walker.got_errors) {
+    return 1;
+  }
+  while (walker.cur_level >= 0) {
+    exit_process_t exit_process = level(&walker)->leave;
+    if (exit_process) (*exit_process)(&walker, level(&walker)->self);
+    --walker.cur_level;
+  }
 
-    if (walker.rootType.kind == CXType_Unexposed)
-      fprintf(stderr, "did not find root type '%s'!", walker.rootName);
-    else {
-      const char* type_spelling =
-          clang_getCString(clang_getTypeSpelling(walker.rootType));
-      fprintf(walker.loader_out,
-      "char* load_one(%s* value, yaml_parser_t* parser) {\n"
-      "  yaml_event_t event;\n"
-      "  yaml_parser_parse(parser, &event);\n"
-      "  if (event.type == YAML_STREAM_START_EVENT) {\n"
-      "    yaml_event_delete(&event);\n"
-      "    yaml_parser_parse(parser, &event);\n"
-      "  }\n"
-      "  if (event.type != YAML_DOCUMENT_START_EVENT) {\n"
-      "    yaml_event_delete(&event);\n"
-      "    return wrong_event_error(YAML_DOCUMENT_START_EVENT, event.type);\n"
-      "  }\n"
-      "  yaml_event_delete(&event);\n"
-      "  yaml_parser_parse(parser, &event);\n"
-      "  char* ret = construct_%s(value, parser, &event);\n"
-      "  yaml_event_delete(&event);\n"
-      "  yaml_parser_parse(parser, &event); // assume document end\n"
-      "  yaml_event_delete(&event);\n"
-      "  return ret;\n"
-      "}\n", type_spelling, walker.rootName);
-      FILE* header_out = fopen(output_header_path, "w");
-      if (header_out == NULL) {
-        fprintf(stderr, "unable to open '%s' for writing.\n",
-                output_header_path);
-        return 1;
-      }
-      fprintf(header_out,
-              "#include <yaml.h>\n"
-              "#include <%s>\n"
-              "char* load_one(%s* value, yaml_parser_t* parser);\n",
-              input_file_name, type_spelling);
-      fclose(header_out);
+  if (walker.rootType.kind == CXType_Unexposed)
+    fprintf(stderr, "did not find root type '%s'!", walker.rootName);
+  else {
+    const char* type_spelling =
+        clang_getCString(clang_getTypeSpelling(walker.rootType));
+    fprintf(walker.loader_out,
+    "char* load_one(%s* value, yaml_parser_t* parser) {\n"
+    "  yaml_event_t event;\n"
+    "  yaml_parser_parse(parser, &event);\n"
+    "  if (event.type == YAML_STREAM_START_EVENT) {\n"
+    "    yaml_event_delete(&event);\n"
+    "    yaml_parser_parse(parser, &event);\n"
+    "  }\n"
+    "  if (event.type != YAML_DOCUMENT_START_EVENT) {\n"
+    "    yaml_event_delete(&event);\n"
+    "    return wrong_event_error(YAML_DOCUMENT_START_EVENT, event.type);\n"
+    "  }\n"
+    "  yaml_event_delete(&event);\n"
+    "  yaml_parser_parse(parser, &event);\n"
+    "  char* ret = construct_%s(value, parser, &event);\n"
+    "  yaml_event_delete(&event);\n"
+    "  yaml_parser_parse(parser, &event); // assume document end\n"
+    "  yaml_event_delete(&event);\n"
+    "  return ret;\n"
+    "}\n", type_spelling, walker.rootName);
+    FILE* header_out = fopen(output_header_path, "w");
+    if (header_out == NULL) {
+      fprintf(stderr, "unable to open '%s' for writing.\n",
+              output_header_path);
+      return 1;
     }
+    fprintf(header_out,
+            "#include <yaml.h>\n"
+            "#include <%s>\n"
+            "char* load_one(%s* value, yaml_parser_t* parser);\n",
+            input_file_name, type_spelling);
+    fclose(header_out);
   }
   
   fclose(walker.loader_out);
