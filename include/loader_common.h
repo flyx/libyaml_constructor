@@ -12,6 +12,8 @@
 #include <stdlib.h>
 #include <yaml.h>
 #include <limits.h>
+#include <stdarg.h>
+#include <assert.h>
 
 static int8_t walk(const int8_t table[][256], const char* const name) {
   int8_t pos = 0;
@@ -48,8 +50,8 @@ static char* escape(const char* const string, size_t* const size) {
 
 #define APPEND(list, ptr) { \
   if ((list)->count == (list)->capacity) { \
-    typeof(list->data) newlist = malloc(sizeof(*list->data) * (list)->capacity * 2); \
-    memcpy(newlist, (list)->data, sizeof(*list->data) * (list)->capacity); \
+    typeof((list)->data) newlist = malloc(sizeof(*(list)->data) * (list)->capacity * 2); \
+    memcpy(newlist, (list)->data, sizeof(*(list)->data) * (list)->capacity); \
     free((list)->data); \
     (list)->data = newlist; \
     (list)->capacity *= 2; \
@@ -73,34 +75,65 @@ static const char* event_spelling(yaml_event_type_t type) {
   }
 }
 
-static char* wrong_event_error(yaml_event_type_t expected,
-                               yaml_event_type_t actual) {
-  char* buffer = malloc(16 + 14 + 14); // template + longest possible spelling
-  sprintf(buffer, "expected %s, got %s", event_spelling(expected),
-          event_spelling(actual));
+#define PO10_LIMIT (SIZE_MAX/10)
+
+
+size_t digits_count(size_t i) {
+  size_t n = 1;
+  size_t po10 = 10;
+  while(i >= po10) {
+    n++;
+    if (po10 > PO10_LIMIT) break;
+    po10 *= 10;
+  }
+  return n;
+}
+
+static char* render_error(yaml_event_t* event, const char* message,
+                          size_t expected_param_length, ...) {
+  static const char pos_template[] = "l. %zu, c. %zu: ";
+  size_t expected_pos_len = sizeof(pos_template) - 7 + // placeholder + terminator
+                            digits_count(event->start_mark.line) +
+                            digits_count(event->start_mark.column);
+  char* buffer = malloc(expected_pos_len + expected_param_length +
+                        strlen(message) + 1);
+  int pos_len = sprintf(buffer, pos_template, event->start_mark.line,
+                          event->start_mark.column);
+  assert(pos_len == expected_pos_len);
+  va_list args;
+  va_start(args, expected_param_length);
+  vsprintf(buffer + expected_pos_len, message, args);
+  va_end(args);
   return buffer;
+}
+
+static char* wrong_event_error(yaml_event_type_t expected,
+                               yaml_event_t* actual) {
+  return render_error(actual, "expected %s, got %s", 14 + 14,
+      event_spelling(actual->type), event_spelling(expected));
 }
 
 static char* construct_int(int * const value, yaml_parser_t* const parser,
                       yaml_event_t* cur) {
   (void)parser;
   if (cur->type != YAML_SCALAR_EVENT) {
-    return wrong_event_error(YAML_SCALAR_EVENT, cur->type);
+    return wrong_event_error(YAML_SCALAR_EVENT, cur);
   }
   char* result;
   long res = strtol((const char*)cur->data.scalar.value, &result, 10);
   if (*result != '\0') {
     size_t escaped_len;
     char* escaped = escape((const char*)cur->data.scalar.value, &escaped_len);
-    char* buffer = malloc(21 + escaped_len);
-    sprintf(buffer, "cannot read %s as int!", escaped);
+    char* buffer = render_error(cur, "cannot read %s as int!", escaped_len,
+                                escaped);
     free(escaped);
     return buffer;
   } else if (res < INT_MIN || res > INT_MAX) {
     size_t escaped_len;
     char* escaped = escape((const char*)cur->data.scalar.value, &escaped_len);
-    char* buffer = malloc(43 + escaped_len);
-    sprintf(buffer, "int value of %s outside representable range!", escaped);
+    char* buffer = render_error(cur,
+                                "int value of %s outside representable range!",
+                                escaped_len, escaped);
     free(escaped);
     return buffer;
   }
@@ -112,7 +145,7 @@ static char* construct_string(char** const value, yaml_parser_t* const parser,
                          yaml_event_t* cur) {
   (void)parser;
   if (cur->type != YAML_SCALAR_EVENT) {
-    return wrong_event_error(YAML_SCALAR_EVENT, cur->type);
+    return wrong_event_error(YAML_SCALAR_EVENT, cur);
   }
   size_t len = strlen((char*) cur->data.scalar.value) + 1;
   *value = malloc(len);
@@ -124,13 +157,13 @@ static char* construct_char(char* const value, yaml_parser_t* const parser,
                        yaml_event_t* cur) {
   (void)parser;
   if (cur->type != YAML_SCALAR_EVENT) {
-    return wrong_event_error(YAML_SCALAR_EVENT, cur->type);
+    return wrong_event_error(YAML_SCALAR_EVENT, cur);
   } else if (cur->data.scalar.value[0] == '\0' ||
              cur->data.scalar.value[1] != '\0') {
     size_t escaped_len;
     char* escaped = escape((const char*)cur->data.scalar.value, &escaped_len);
-    char* buffer = malloc(32 + escaped_len);
-    sprintf(buffer, "expected single character, got %s", escaped);
+    char* buffer = render_error(cur, "expected single character, got %s",
+                                escaped_len, escaped);
     free(escaped);
     return buffer;
   }

@@ -12,3 +12,4 @@ add_executable(simple simple/simple.h simple/simple.c
 target_include_directories(simple
         PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${PROJECT_SOURCE_DIR}/include simple)
 target_link_libraries(simple ${LibYaml_LIBRARIES})
+set_property(TARGET simple PROPERTY C_STANDARD 99)

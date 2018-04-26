@@ -1,4 +1,5 @@
 #include <memory.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -119,6 +120,20 @@ static inline void push_level(walker_t* const walker, level_t l) {
   walker->levels[++walker->cur_level] = l;
 }
 
+static void print_error(CXCursor cursor, const char* message, ...) {
+  va_list args;
+  CXSourceLocation location = clang_getCursorLocation(cursor);
+  CXString filename;
+  unsigned int line, column;
+
+  clang_getPresumedLocation(location, &filename, &line, &column);
+
+  fprintf(stderr, "%s, %d:%d : ", clang_getCString(filename), line, column);
+  va_start(args, message);
+  vprintf(message, args);
+  va_end(args);
+}
+
 static char* new_deserialization(const char* const field, const char* type) {
   static const char template[] =
       "ret = construct_%s(&value->%s, parser, &event);\n";
@@ -144,7 +159,7 @@ static bool get_annotation(CXCursor cursor, bool has_param,
     if (has_param) {
       while (*pos == ' ' || *pos == '\t') pos++;
       if (*pos == '\r' || *pos == '\n' || *pos == '\0') {
-        fprintf(stderr, "annotation %.*s is missing its parameter!\n",
+        print_error(cursor, "annotation %.*s is missing its parameter!\n",
                 (int)name_len, start);
         return false;
       }
@@ -210,11 +225,11 @@ static process_result_t enter_struct_item(walker_t* const walker,
   const enum CXCursorKind kind = clang_getCursorKind(cursor);
   switch (kind) {
     case CXCursor_StructDecl:
-      fprintf(stderr, "nested structs not allowed!\n");
+      print_error(cursor, "nested structs not allowed!\n");
       return error;
     case CXCursor_FieldDecl: break;
     default:
-      fprintf(stderr, "Unexpected item in struct (expected field): %s",
+      print_error(cursor, "Unexpected item in struct (expected field): %s",
               clang_getCString(clang_getCursorKindSpelling(kind)));
       return error;
   }
@@ -233,14 +248,14 @@ static process_result_t enter_struct_item(walker_t* const walker,
   if (annotation.name != NULL) {
     if (!strcmp(annotation.name, "string")) {
       if (t.kind != CXType_Pointer) {
-        fprintf(stderr, "'!string' must be applied on a char pointer "
+        print_error(cursor, "'!string' must be applied on a char pointer "
                         "(found on a '%s')!\n",
                 clang_getCString(clang_getTypeSpelling(t)));
         ret = error;
       } else {
         const CXType pointee = clang_getPointeeType(t);
         if (pointee.kind != CXType_Char_S) {
-            fprintf(stderr, "'!string' must be applied on a char pointer "
+            print_error(cursor, "'!string' must be applied on a char pointer "
                             "(found on a '%s')!\n",
                     clang_getCString(clang_getTypeSpelling(t)));
         }
@@ -248,7 +263,7 @@ static process_result_t enter_struct_item(walker_t* const walker,
         ret = okay;
       }
     } else {
-      fprintf(stderr, "Unknown annotation: '%s'", annotation.name);
+      print_error(cursor, "Unknown annotation: '%s'", annotation.name);
       ret = error;
     }
     free_annotation(annotation);
@@ -275,7 +290,7 @@ static process_result_t enter_struct_item(walker_t* const walker,
         ret = okay;
         break;
       default:
-        fprintf(stderr, "Target type not implemented: %s",
+        print_error(cursor, "Target type not implemented: %s",
                 clang_getCString(clang_getTypeSpelling(t)));
         ret = error;
     }
@@ -289,7 +304,7 @@ static process_result_t enter_enum_item(walker_t* const walker,
   *exit_process = NULL;
   const enum CXCursorKind kind = clang_getCursorKind(cursor);
   if (kind != CXCursor_EnumConstantDecl) {
-      fprintf(stderr,
+      print_error(cursor,
               "Unexpected item in enum type (expected enum constant): %s",
               clang_getCString(clang_getCursorKindSpelling(kind)));
       return error;
@@ -305,7 +320,7 @@ static process_result_t enter_enum_item(walker_t* const walker,
     if (!strcmp(annotation.name, "repr")) {
       representation = annotation.param;
     } else {
-      fprintf(stderr, "Unknown annotation: '%s'", annotation.name);
+      print_error(cursor, "Unknown annotation: '%s'", annotation.name);
       free_annotation(annotation);
       return error;
     }
@@ -332,11 +347,11 @@ static process_result_t enter_list_item(walker_t* const walker,
   const enum CXCursorKind kind = clang_getCursorKind(cursor);
   switch (kind) {
     case CXCursor_StructDecl:
-      fprintf(stderr, "nested structs not allowed!\n");
+      print_error(cursor, "nested structs not allowed!\n");
       return error;
     case CXCursor_FieldDecl: break;
     default:
-      fprintf(stderr, "Unexpected item in struct (expected field): %s",
+      print_error(cursor, "Unexpected item in struct (expected field): %s",
               clang_getCString(clang_getCursorKindSpelling(kind)));
       return error;
   }
@@ -345,12 +360,12 @@ static process_result_t enter_list_item(walker_t* const walker,
 
   if (!strcmp(name, "data")) {
     if (t.kind != CXType_Pointer) {
-      fputs("data field of list must be a pointer!\n", stderr);
+      print_error(cursor, "data field of list must be a pointer!\n");
       return error;
     }
     const CXType pointee = clang_getPointeeType(t);
     if (pointee.kind == CXType_Pointer) {
-      fputs("pointer to pointer not supported as list!\n", stderr);
+      print_error(cursor, "pointer to pointer not supported as list!\n");
       return error;
     }
     list_info->data_type = pointee;
@@ -358,8 +373,9 @@ static process_result_t enter_list_item(walker_t* const walker,
     if (t.kind != CXType_UChar && t.kind != CXType_UShort &&
         t.kind != CXType_UInt && t.kind != CXType_ULong &&
         t.kind != CXType_ULongLong) {
-      fprintf(stderr, "\"count\" field must be an unsigned type (found %i)!\n",
-          t.kind);
+      print_error(cursor,
+                  "\"count\" field must be an unsigned type (found %i)!\n",
+                  t.kind);
       return error;
     }
     list_info->seen_count = true;
@@ -367,12 +383,12 @@ static process_result_t enter_list_item(walker_t* const walker,
     if (t.kind != CXType_UChar && t.kind != CXType_UShort &&
         t.kind != CXType_UInt && t.kind != CXType_ULong &&
         t.kind != CXType_ULongLong) {
-      fputs("\"capacity\" field must be an unsigned type!\n", stderr);
+      print_error(cursor, "\"capacity\" field must be an unsigned type!\n");
       return error;
     }
     list_info->seen_capacity = true;
   } else {
-    fprintf(stderr, "illegal field \"%s\" for list!\n", name);
+    print_error(cursor, "illegal field \"%s\" for list!\n", name);
     return error;
   }
   return okay;
@@ -391,7 +407,7 @@ static process_result_t enter_struct_decl(walker_t* const walker,
       push_level(walker, list_level(cursor));
       ret = okay;
     } else {
-      fprintf(stderr, "Unknown annotation: %s", annotation.name);
+      print_error(cursor, "Unknown annotation: %s", annotation.name);
       ret = error;
     }
     free_annotation(annotation);
@@ -443,7 +459,7 @@ static process_result_t enter_def_level(walker_t* const walker,
       *exit_process = NULL;
       return okay;
     default:
-      fprintf(stderr, "Unexpected top-level item: %s\n",
+      print_error(cursor, "Unexpected top-level item: %s\n",
               clang_getCString(clang_getCursorKindSpelling(kind)));
       return error;
   }
@@ -494,8 +510,9 @@ static void process_struct_nodes(walker_t* const walker,
               "        if (found[%zu]) {\n"
               "          size_t escaped_len;\n"
               "          char* escaped = escape(name, &escaped_len);\n"
-              "          ret = malloc(16 + escaped_len);\n"
-              "          sprintf(ret, \"duplicate key: %%s\", escaped);\n"
+              "          ret = render_error(&key, \"duplicate key: %%s\", "
+              "escaped_len, escaped);\n"
+              "          free(escaped);\n"
               "        } else {\n"
               "          found[%zu] = true;\n"
               "          ", i, index, index);
@@ -515,7 +532,7 @@ static process_result_t leave_struct(walker_t* const walker,
   dea_t* dea = (dea_t*) walker->levels[walker->cur_level + 1].data;
   put_control_table(walker, dea);
   fputs("  if (cur->type != YAML_MAPPING_START_EVENT) {\n"
-        "    return wrong_event_error(YAML_MAPPING_START_EVENT, cur->type);\n"
+        "    return wrong_event_error(YAML_MAPPING_START_EVENT, cur);\n"
         "  }\n"
         "  yaml_event_t key;\n"
         "  yaml_parser_parse(parser, &key);\n"
@@ -542,7 +559,7 @@ static process_result_t leave_struct(walker_t* const walker,
   fputs("};\n"
         "  while(key.type != YAML_MAPPING_END_EVENT) {\n"
         "    if (key.type != YAML_SCALAR_EVENT) {\n"
-        "      ret = wrong_event_error(YAML_SCALAR_EVENT, key.type);\n"
+        "      ret = wrong_event_error(YAML_SCALAR_EVENT, &key);\n"
         "      break;\n"
         "    }\n"
         "    int8_t result = walk(table, "
@@ -555,8 +572,8 @@ static process_result_t leave_struct(walker_t* const walker,
   fputs("      default: {\n"
         "          size_t escaped_len;\n"
         "          char* escaped = escape(name, &escaped_len);\n"
-        "          ret = malloc(16 + escaped_len);\n"
-        "          sprintf(ret, \"unknown field: %s\", escaped);\n"
+        "          ret = render_error(&key, \"unknown field: %s\", escaped_len,"
+        "escaped);\n"
         "          free(escaped);\n"
         "        }\n"
         "        break;\n"
@@ -567,12 +584,14 @@ static process_result_t leave_struct(walker_t* const walker,
         "    yaml_parser_parse(parser, &key);\n"
         "  }\n"
         "  yaml_event_delete(&key);\n"
-        "  for (size_t i = 0; i < sizeof(found); i++) {\n"
-        "    if (!found[i]) {\n"
-        "      const size_t name_len = strlen(names[i]);\n"
-        "      ret = malloc(17 + name_len);\n"
-        "      sprintf(ret, \"missing value for field \\\"%s\\\"\", names[i]);\n"
-        "      break;\n"
+        "  if (!ret) {\n"
+        "    for (size_t i = 0; i < sizeof(found); i++) {\n"
+        "      if (!found[i]) {\n"
+        "        const size_t name_len = strlen(names[i]);\n"
+        "        ret = render_error(cur, \"missing value for field \\\"%s\\\"\","
+        " name_len, names[i]);\n"
+        "        break;\n"
+        "      }\n"
         "    }\n"
         "  }\n"
         "  return ret;\n"
@@ -602,7 +621,7 @@ static process_result_t leave_enum(walker_t* const walker,
   dea_t* dea = (dea_t*) walker->levels[walker->cur_level + 1].data;
   put_control_table(walker, dea);
   fputs("  if (cur->type != YAML_SCALAR_EVENT) {\n"
-        "    return wrong_event_error(YAML_SCALAR_EVENT, cur->type);\n"
+        "    return wrong_event_error(YAML_SCALAR_EVENT, cur);\n"
         "  }\n"
         "  int8_t result = walk(table, "
         "(const char*)cur->data.scalar.value);\n"
@@ -613,8 +632,8 @@ static process_result_t leave_enum(walker_t* const walker,
         "      size_t escaped_len;\n"
         "      char* escaped = escape((const char*)cur->data.scalar.value, "
         "&escaped_len);\n"
-        "      ret = malloc(21 + escaped_len);\n"
-        "      sprintf(ret, \"unknown enum value: %s\", escaped);\n"
+        "      ret = render_error(cur, \"unknown enum value: %s\", escaped_len,"
+        " escaped);\n"
         "      free(escaped);\n"
         "    }\n"
         "  }\n"
@@ -631,15 +650,15 @@ static process_result_t leave_list(walker_t* const walker,
       (list_info_t*) walker->levels[walker->cur_level + 1].data;
   process_result_t ret = okay;
   if (list_info->data_type.kind == CXType_Unexposed) {
-    fputs("data field for list missing!\n", stderr);
+    print_error(level(walker)->self, "data field for list missing!\n");
     ret = error;
   }
   if (!list_info->seen_count) {
-    fputs("count field for list missing!\n", stderr);
+    print_error(level(walker)->self, "count field for list missing!\n");
     ret = error;
   }
   if (!list_info->seen_capacity) {
-    fputs("capacity field for list missing!\n", stderr);
+    print_error(level(walker)->self, "capacity field for list missing!\n");
     ret = error;
   }
   if (ret == okay) {
@@ -647,10 +666,7 @@ static process_result_t leave_list(walker_t* const walker,
         clang_getCString(clang_getTypeSpelling(list_info->data_type));
     fprintf(walker->loader_out,
             "  if (cur->type != YAML_SEQUENCE_START_EVENT) {\n"
-            "    char* buffer = malloc(100);\n"
-            "    sprintf(buffer, \"expected SEQUENCE_START, got %%s!\", "
-                    "event_spelling(cur->type));\n"
-            "    return buffer;\n"
+            "    return wrong_event_error(YAML_SEQUENCE_START_EVENT, cur);\n"
             "  }\n"
             "  value->data = malloc(16 * sizeof(%s));\n"
             "  value->count = 0;\n"
@@ -876,7 +892,7 @@ int main(const int argc, const char* argv[]) {
     "  }\n"
     "  if (event.type != YAML_DOCUMENT_START_EVENT) {\n"
     "    yaml_event_delete(&event);\n"
-    "    return wrong_event_error(YAML_DOCUMENT_START_EVENT, event.type);\n"
+    "    return wrong_event_error(YAML_DOCUMENT_START_EVENT, &event);\n"
     "  }\n"
     "  yaml_event_delete(&event);\n"
     "  yaml_parser_parse(parser, &event);\n"

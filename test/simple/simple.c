@@ -13,7 +13,7 @@ static const char* input =
     "    age: 27\n"
     "    gender: male\n"
     "  - name: Scrooge McDuck\n"
-    "    age: 75\n"
+    "    age: blubber\n"
     "    gender: other\n";
 
 int main(int argc, char* argv[]) {

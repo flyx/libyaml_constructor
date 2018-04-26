@@ -27,17 +27,18 @@ List of stuff that currently should work:
  * `int`
  * `char`
  * `struct` at top-level, with fields containing anything from this list
- * `char*` as string, dynamic lists (see below)
+ * `enum` at top-level
+ * `char*` as string
+ * dynamic lists (see below)
+ * having reference to line and column in error messages
 
 List of stuff that currently does not work:
 
  * serializing back to YAML
- * anonymous structs
+ * anonymous structs inside structs
  * pointer types (apart from strings and lists)
- * enums
  * unions
  * any basic type other than `int` and `char`
- * having reference to line and column in error messages
  * reading the documentation (there is none apart from this Readme)
 
 ## Usage
@@ -54,7 +55,8 @@ In your code, you need to *annotate* certain structures so that
 libyaml_mapper knows your intention. You annotate a type or field by
 adding a comment in front of it which has `!` as first character in the
 comment content (i.e. it starts with either `//!` or `/*!`). The string
-following the `!` is the annotation.
+following the `!` is the annotation until the next space. Content after
+that space until the following space is an optional parameter.
 
 The following annotations exist:
 
@@ -63,6 +65,10 @@ The following annotations exist:
  * `list`: for structs containing a `data` pointer as well as two
    unsigned values `count` and `capacity`. libyaml_mapper will treat the
    annotated struct as dynamically growing list of items.
+ * `repr`: takes a parameter. Currently only supported for enum values.
+   Enum value will be loaded from the representation given as parameter.
+   This means that the spelling of the enum value in the code will *not*
+   be accepted.
 
 ## Example
 
@@ -74,11 +80,20 @@ Let's assume we have some header file `simple.h` like this:
 #ifndef _SIMPLE_H
 #define _SIMPLE_H
 
+enum gender_t {
+  //!repr male
+  MALE = 0,
+  //!repr female
+  FEMALE = 1,
+  //!repr other
+  OTHER = 2
+};
+
 struct person {
   //!string
   char* name;
-
   int age;
+  enum gender_t gender;
 };
 
 //!list
@@ -116,12 +131,15 @@ Now, having those, we write our main procedure:
 static const char* input =
     "symbol: W\n"
     "people:\n"
-    "  - name: Peter Pan\n"
-    "    age: 12\n"
+    "  - name: Ada Lovelace\n"
+    "    age: 36\n"
+    "    gender: female\n"
     "  - name: Karl Koch\n"
     "    age: 27\n"
+    "    gender: male\n"
     "  - name: Scrooge McDuck\n"
-    "    age: 75\n";
+    "    age: 75\n"
+    "    gender: other\n";
 
 int main(int argc, char* argv[]) {
   yaml_parser_t parser;
