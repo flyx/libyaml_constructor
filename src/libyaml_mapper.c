@@ -55,18 +55,36 @@ typedef struct {
 } list_info_t;
 
 typedef struct {
+  dea_t dea;
+  const char* typedef_name;
+} enum_info_t;
+
+typedef struct {
   char *name, *param;
 } annotation_t;
+
+typedef struct {
+  const char* enum_constants[256];
+  size_t constants_count, cur;
+  bool seen_union;
+  const char* field_name;
+} variant_info_t;
 
 static process_result_t enter_toplevel(walker_t*, CXCursor, exit_process_t*);
 static process_result_t enter_typedef(walker_t*, CXCursor, exit_process_t*);
 static process_result_t leave_struct(walker_t*, CXCursor);
 static process_result_t leave_list(walker_t*, CXCursor);
 static process_result_t leave_enum(walker_t*, CXCursor);
+static process_result_t leave_variant(walker_t*, CXCursor);
 
 static process_result_t enter_struct_item(walker_t*, CXCursor, exit_process_t*);
 static process_result_t enter_list_item(walker_t*, CXCursor, exit_process_t*);
 static process_result_t enter_enum_item(walker_t*, CXCursor, exit_process_t*);
+static process_result_t enter_variant_item(walker_t*, CXCursor,
+                                           exit_process_t*);
+static process_result_t enter_variant_union_item(walker_t*, CXCursor,
+                                                 exit_process_t*);
+
 
 static inline dea_node_t* new_node(const char* name) {
   dea_node_t* const val = malloc(sizeof(dea_node_t));
@@ -86,7 +104,7 @@ static inline level_t typedef_level(CXCursor parent, const char* name) {
   return ret;
 }
 
-static inline level_t struct_level(CXCursor parent) {
+static inline level_t struct_level(CXCursor const parent) {
   dea_t* const dea = malloc(sizeof(dea_t));
   dea->count = 1;
   dea->nodes[0] = new_node(NULL);
@@ -94,15 +112,17 @@ static inline level_t struct_level(CXCursor parent) {
   return ret;
 }
 
-static inline level_t enum_level(CXCursor parent) {
-  dea_t* const dea = malloc(sizeof(dea_t));
-  dea->count = 1;
-  dea->nodes[0] = new_node(NULL);
-  const level_t ret = {parent, {}, &enter_enum_item, NULL, false, dea};
+static inline level_t enum_level(CXCursor const parent,
+                                 const char* const typedef_name) {
+  enum_info_t* const info = malloc(sizeof(enum_info_t));
+  info->typedef_name = typedef_name;
+  info->dea.count = 1;
+  info->dea.nodes[0] = new_node(NULL);
+  const level_t ret = {parent, {}, &enter_enum_item, NULL, false, info};
   return ret;
 }
 
-static inline level_t list_level(CXCursor parent) {
+static inline level_t list_level(CXCursor const parent) {
   list_info_t* const list_info = malloc(sizeof(list_info_t));
   list_info->seen_capacity = false;
   list_info->seen_count = false;
@@ -112,15 +132,25 @@ static inline level_t list_level(CXCursor parent) {
   return ret;
 }
 
+static inline level_t variant_level(CXCursor const parent) {
+  const level_t ret = {parent, {}, &enter_variant_item, NULL, false, NULL};
+  return ret;
+}
+
+static inline level_t variant_union_level(CXCursor const parent) {
+  const level_t ret = {parent, {}, &enter_variant_union_item, NULL, false, NULL};
+  return ret;
+}
+
 static inline level_t* level(walker_t* const walker) {
   return &walker->levels[walker->cur_level];
 }
 
-static inline void push_level(walker_t* const walker, level_t l) {
+static inline void push_level(walker_t* const walker, level_t const l) {
   walker->levels[++walker->cur_level] = l;
 }
 
-static void print_error(CXCursor cursor, const char* message, ...) {
+static void print_error(CXCursor const cursor, const char* message, ...) {
   va_list args;
   CXSourceLocation location = clang_getCursorLocation(cursor);
   CXString filename;
@@ -134,14 +164,16 @@ static void print_error(CXCursor cursor, const char* message, ...) {
   va_end(args);
 }
 
-static char* new_deserialization(const char* const field, const char* type) {
+static char* new_deserialization(const char* const field, const char* type,
+                                 const char* event_ref) {
   static const char template[] =
-      "ret = construct_%s(&value->%s, parser, &event);\n";
+      "ret = construct_%s(&value->%s, parser, %s);\n";
   const size_t tmpl_len = sizeof(template) - 1;
 
-  const size_t res_len = tmpl_len + strlen(field) + strlen(type) - 3;
+  const size_t res_len = tmpl_len + strlen(field) + strlen(type) +
+                         strlen(event_ref) - 5;
   char* ret = malloc(res_len);
-  sprintf(ret, template, type, field);
+  sprintf(ret, template, type, field, event_ref);
   return ret;
 }
 
@@ -218,6 +250,60 @@ static dea_node_t* include_name(dea_t* const dea, const char* name) {
   return cur_node;
 }
 
+static char* gen_field_deserialization(const char* const name,
+                                       CXCursor const cursor,
+                                       const char* event_ref) {
+  const CXType t = clang_getCanonicalType(clang_getCursorType(cursor));
+
+  annotation_t annotation;
+  bool success = get_annotation(cursor, false, &annotation);
+  if (!success) return NULL;
+
+  if (annotation.name != NULL) {
+    char* ret;
+    if (!strcmp(annotation.name, "string")) {
+      if (t.kind != CXType_Pointer) {
+        print_error(cursor, "'!string' must be applied on a char pointer "
+                            "(found on a '%s')!\n",
+                    clang_getCString(clang_getTypeSpelling(t)));
+        ret = NULL;
+      } else {
+        const CXType pointee = clang_getPointeeType(t);
+        if (pointee.kind != CXType_Char_S) {
+          print_error(cursor, "'!string' must be applied on a char pointer "
+                              "(found on a '%s')!\n",
+                      clang_getCString(clang_getTypeSpelling(t)));
+        }
+        ret = new_deserialization(name, "string", event_ref);
+      }
+    } else {
+      print_error(cursor, "Unknown annotation: '%s'", annotation.name);
+      ret = NULL;
+    }
+    free_annotation(annotation);
+    return ret;
+  } else {
+    switch (t.kind) {
+      case CXType_Int:
+        return new_deserialization(name, "int", event_ref);
+      case CXType_Char_S:
+        return new_deserialization(name, "char", event_ref);
+      case CXType_Record:
+        // TODO: ensure a loader for this record exists
+        return new_deserialization(name, raw_name(clang_getTypeSpelling(t)),
+            event_ref);
+      case CXType_Enum:
+        // TODO: ensure a loader for this enum exists
+        return new_deserialization(name, raw_name(clang_getTypeSpelling(t)),
+            event_ref);
+      default:
+        print_error(cursor, "Target type not implemented: %s",
+                    clang_getCString(clang_getTypeSpelling(t)));
+        return NULL;
+    }
+  }
+}
+
 static process_result_t enter_struct_item(walker_t* const walker,
                                           CXCursor const cursor,
                                           exit_process_t* const exit_process) {
@@ -234,68 +320,14 @@ static process_result_t enter_struct_item(walker_t* const walker,
       return error;
   }
   const char* const name = clang_getCString(clang_getCursorSpelling(cursor));
-  const CXType t = clang_getCanonicalType(clang_getCursorType(cursor));
 
   dea_t* dea = (dea_t*) level(walker)->data;
   dea_node_t* cur_node = include_name(dea, name);
   if (!cur_node) return error;
-  
-  annotation_t annotation;
-  bool success = get_annotation(cursor, false, &annotation);
-  if (!success) return error;
-  process_result_t ret;
-  
-  if (annotation.name != NULL) {
-    if (!strcmp(annotation.name, "string")) {
-      if (t.kind != CXType_Pointer) {
-        print_error(cursor, "'!string' must be applied on a char pointer "
-                        "(found on a '%s')!\n",
-                clang_getCString(clang_getTypeSpelling(t)));
-        ret = error;
-      } else {
-        const CXType pointee = clang_getPointeeType(t);
-        if (pointee.kind != CXType_Char_S) {
-            print_error(cursor, "'!string' must be applied on a char pointer "
-                            "(found on a '%s')!\n",
-                    clang_getCString(clang_getTypeSpelling(t)));
-        }
-        cur_node->loader_implementation = new_deserialization(name, "string");
-        ret = okay;
-      }
-    } else {
-      print_error(cursor, "Unknown annotation: '%s'", annotation.name);
-      ret = error;
-    }
-    free_annotation(annotation);
-  } else {
-    switch (t.kind) {
-      case CXType_Int:
-        cur_node->loader_implementation = new_deserialization(name, "int");
-        ret = okay;
-        break;
-      case CXType_Char_S:
-        cur_node->loader_implementation = new_deserialization(name, "char");
-        ret = okay;
-        break;
-      case CXType_Record:
-        // TODO: ensure a loader for this record exists
-        cur_node->loader_implementation =
-            new_deserialization(name, raw_name(clang_getTypeSpelling(t)));
-        ret = okay;
-        break;
-      case CXType_Enum:
-        // TODO: ensure a loader for this enum exists
-        cur_node->loader_implementation =
-            new_deserialization(name, raw_name(clang_getTypeSpelling(t)));
-        ret = okay;
-        break;
-      default:
-        print_error(cursor, "Target type not implemented: %s",
-                clang_getCString(clang_getTypeSpelling(t)));
-        ret = error;
-    }
-  }
-  return ret;
+
+  cur_node->loader_implementation = gen_field_deserialization(name, cursor,
+                                                              "&event");
+  return cur_node->loader_implementation ? okay : error;
 }
 
 static process_result_t enter_enum_item(walker_t* const walker,
@@ -331,7 +363,7 @@ static process_result_t enter_enum_item(walker_t* const walker,
   if (annotation.name != NULL) free_annotation(annotation);
   if (!cur_node) return error;
 
-  static const char template[] = "      *value = %s;\n";
+  static const char template[] = "*result = %s;\n";
   const size_t impl_len = sizeof(template) + strlen(name) - 1;
   char* const impl = malloc(impl_len);
   sprintf(impl, template, name);
@@ -394,6 +426,133 @@ static process_result_t enter_list_item(walker_t* const walker,
   return okay;
 }
 
+static enum CXChildVisitResult enum_visitor(CXCursor cursor, CXCursor parent,
+                                            CXClientData client_data) {
+  (void)parent;
+  variant_info_t* info = (variant_info_t*) client_data;
+  const enum CXCursorKind kind = clang_getCursorKind(cursor);
+  if (kind != CXCursor_EnumConstantDecl) {
+    print_error(cursor,
+                "Unexpected item in enum type (expected enum constant): %s",
+                clang_getCString(clang_getCursorKindSpelling(kind)));
+    info->constants_count = SIZE_MAX;
+    return CXChildVisit_Break;
+  }
+  const char* const name = clang_getCString(clang_getCursorSpelling(cursor));
+  info->enum_constants[info->constants_count++] = name;
+  return CXChildVisit_Continue;
+}
+
+static process_result_t enter_variant_item(walker_t* walker, CXCursor cursor,
+                                           exit_process_t* exit_process) {
+  *exit_process = NULL;
+  CXType t = clang_getCanonicalType(clang_getCursorType(cursor));
+  process_result_t ret;
+  variant_info_t* info = (variant_info_t*)level(walker)->data;
+  if (info == NULL) {
+    if (t.kind != CXType_Enum) {
+      print_error(cursor, "first field of variant struct must be an enum, "
+                          "found a %s!\n",
+                  clang_getCString(clang_getTypeSpelling(t)));
+      ret = error;
+    } else {
+      info = malloc(sizeof(variant_info_t));
+      info->constants_count = 0;
+      info->seen_union = false;
+      clang_visitChildren(clang_getTypeDeclaration(t), &enum_visitor,
+                          info);
+      if (info->constants_count == 0) {
+        print_error(cursor,
+                    "enum for variant struct must have at least one item!\n");
+        ret = error;
+      } else {
+        info->field_name = clang_getCString(clang_getCursorSpelling(cursor));
+        level(walker)->data = info;
+        ret = okay;
+      }
+    }
+  } else if (t.kind != CXType_Record) {
+    print_error(cursor, "second field of variant struct must be a union, "
+                        "found a %s!\n",
+                clang_getCString(clang_getTypeSpelling(t)));
+    ret = error;
+  } else if (info->seen_union) {
+    print_error(cursor, "variant struct must not have more than two fields!\n");
+    ret = error;
+  } else {
+    fputs("  yaml_char_t* tag;\n"
+            "  switch(cur->type) {\n"
+            "    case YAML_SCALAR_EVENT:\n"
+            "      tag = cur->data.scalar.tag;\n"
+            "      break;\n"
+            "    case YAML_MAPPING_START_EVENT:\n"
+            "      tag = cur->data.mapping_start.tag;\n"
+            "      break;\n"
+            "    case YAML_SEQUENCE_START_EVENT:\n"
+            "      tag = cur->data.sequence_start.tag;\n"
+            "      break;\n"
+            "    default:\n"
+            "      return render_error(cur, \"expected tagged event, got %s\","
+            "14, event_spelling(cur->type));\n"
+            "  }\n"
+            "  if (tag[0] != '!' || tag[1] == '\\0') {\n"
+            "    return render_error(cur, \"value for variant struct must have"
+            " specific local tag, got \\\"%s\\\"\", strlen((const char*)tag),"
+            " (const char*)tag);\n"
+            "  }\n", walker->loader_out);
+    fprintf(walker->loader_out,
+            "  bool res = to_enum((const char*)(tag + 1), &value->%s);\n",
+            info->field_name);
+    fputs("  if (!res) {\n"
+          "    return render_error(cur, \"not a valid variant: \\\"%s\\\"\","
+          " strlen((const char*)tag), (const char*)tag);\n"
+          "  }\n"
+          "  char* ret = NULL;\n", walker->loader_out);
+    fprintf(walker->loader_out, "  switch(value->%s) {\n", info->field_name);
+    push_level(walker, variant_union_level(cursor));
+    info->seen_union = true;
+    info->cur = 0;
+    ret = okay;
+  }
+  return ret;
+}
+
+static process_result_t enter_variant_union_item
+    (walker_t* const walker, CXCursor const cursor,
+     exit_process_t* const exit_process) {
+  *exit_process = NULL;
+  const enum CXCursorKind kind = clang_getCursorKind(cursor);
+  switch (kind) {
+    case CXCursor_StructDecl:
+      print_error(cursor, "struct in union not allowed!\n");
+      return error;
+    case CXCursor_FieldDecl: break;
+    default:
+      print_error(cursor, "Unexpected item in struct (expected field): %s",
+                  clang_getCString(clang_getCursorKindSpelling(kind)));
+      return error;
+  }
+  const char* const name = clang_getCString(clang_getCursorSpelling(cursor));
+
+  variant_info_t* info =
+      (variant_info_t*) walker->levels[walker->cur_level - 1].data;
+
+  process_result_t ret;
+  char* impl = gen_field_deserialization(name, cursor, "cur");
+  if (!impl) {
+    ret = error;
+  } else if (info->cur == info->constants_count) {
+    print_error(cursor, "More union items than enum values!\n");
+    ret = error;
+  } else {
+    fprintf(walker->loader_out, "    case %s:\n      %s      break;\n",
+        info->enum_constants[info->cur++], impl);
+    free(impl);
+    ret = okay;
+  }
+  return ret;
+}
+
 static process_result_t enter_struct_decl(walker_t* const walker,
                                           CXCursor const cursor,
                                           exit_process_t* exit_process) {
@@ -405,6 +564,10 @@ static process_result_t enter_struct_decl(walker_t* const walker,
     if (!strcmp(annotation.name, "list")) {
       *exit_process = &leave_list;
       push_level(walker, list_level(cursor));
+      ret = okay;
+    } else if (!strcmp(annotation.name, "variant")) {
+      *exit_process = &leave_variant;
+      push_level(walker, variant_level(cursor));
       ret = okay;
     } else {
       print_error(cursor, "Unknown annotation: %s", annotation.name);
@@ -421,8 +584,9 @@ static process_result_t enter_struct_decl(walker_t* const walker,
 
 static process_result_t enter_enum_decl(walker_t* const walker,
                                         CXCursor const cursor,
-                                        exit_process_t* exit_process) {
-  push_level(walker, enum_level(cursor));
+                                        exit_process_t* const  exit_process,
+                                        const char* const typedef_name) {
+  push_level(walker, enum_level(cursor, typedef_name));
   *exit_process = &leave_enum;
   return okay;
 }
@@ -452,8 +616,7 @@ static process_result_t enter_def_level(walker_t* const walker,
       ret = enter_struct_decl(walker, cursor, exit_process);
       break;
     case CXCursor_EnumDecl:
-      ret = enter_enum_decl(walker, cursor, exit_process);
-      break;
+      return enter_enum_decl(walker, cursor, exit_process, typedef_name);
     case CXCursor_TypedefDecl:
       push_level(walker, typedef_level(cursor, actual_name));
       *exit_process = NULL;
@@ -618,28 +781,46 @@ static void process_enum_nodes(walker_t* const walker,
 static process_result_t leave_enum(walker_t* const walker,
                                    CXCursor const cursor) {
   (void)cursor;
-  dea_t* dea = (dea_t*) walker->levels[walker->cur_level + 1].data;
-  put_control_table(walker, dea);
-  fputs("  if (cur->type != YAML_SCALAR_EVENT) {\n"
+  CXType t = clang_getCursorType(cursor);
+  const char* simple_name = raw_name(clang_getTypeSpelling(t));
+  enum_info_t* info = (enum_info_t*) walker->levels[walker->cur_level + 1].data;
+  fprintf(walker->loader_out,
+          "static bool to_enum(const char* const value, %s * const result) {\n",
+          info->typedef_name ? info->typedef_name :
+          clang_getCString(clang_getTypeSpelling(t)));
+  put_control_table(walker, &info->dea);
+  fputs("  int8_t res = walk(table, value);\n"
+        "  switch(res) {\n", walker->loader_out);
+  process_enum_nodes(walker, &info->dea);
+  fputs("    default: return false;\n"
+        "  }\n"
+        "  return true;\n"
+        "}\n\n", walker->loader_out);
+
+  fprintf(walker->loader_out,
+          "static char* construct_%s(%s * const value, "
+          "yaml_parser_t* const parser, yaml_event_t* cur) {\n",
+          info->typedef_name ? info->typedef_name : simple_name,
+          info->typedef_name ? info->typedef_name :
+          clang_getCString(clang_getTypeSpelling(t)));
+  fputs("  (void)parser;\n"
+        "  if (cur->type != YAML_SCALAR_EVENT) {\n"
         "    return wrong_event_error(YAML_SCALAR_EVENT, cur);\n"
         "  }\n"
-        "  int8_t result = walk(table, "
-        "(const char*)cur->data.scalar.value);\n"
-        "  char* ret = NULL;\n"
-        "  switch(result) {\n", walker->loader_out);
-  process_enum_nodes(walker, dea);
-  fputs("    default: {\n"
-        "      size_t escaped_len;\n"
-        "      char* escaped = escape((const char*)cur->data.scalar.value, "
+        "  char* ret;\n"
+        "  if (to_enum((const char*)cur->data.scalar.value, value)) {\n"
+        "    ret = NULL;\n"
+        "  } else {\n"
+        "    size_t escaped_len;\n"
+        "    char* escaped = escape((const char*)cur->data.scalar.value, "
         "&escaped_len);\n"
-        "      ret = render_error(cur, \"unknown enum value: %s\", escaped_len,"
+        "    ret = render_error(cur, \"unknown enum value: %s\", escaped_len,"
         " escaped);\n"
-        "      free(escaped);\n"
-        "    }\n"
+        "    free(escaped);\n"
         "  }\n"
         "  return ret;\n"
         "}\n\n", walker->loader_out);
-  free(dea);
+  free(info);
   return okay;
 }
 
@@ -692,6 +873,31 @@ static process_result_t leave_list(walker_t* const walker,
   }
   free(list_info);
   return ret;
+}
+
+static process_result_t leave_variant(walker_t* walker, CXCursor cursor) {
+  variant_info_t* info =
+      (variant_info_t*) walker->levels[walker->cur_level + 1].data;
+
+  (void)cursor;
+  bool seen_empty_variants = false;
+  while (info->cur < info->constants_count) {
+    seen_empty_variants = true;
+    fprintf(walker->loader_out,
+    "    case %s:\n", info->enum_constants[info->cur++]);
+  }
+  if (seen_empty_variants) {
+    fputs("      if (cur->type != YAML_SCALAR_EVENT ||\n"
+          "          (cur->data.scalar.value[0] != '\\0')) {\n"
+          "        ret = render_error(cur, \"variant does not allow content\","
+          " 0);\n"
+          "      } else ret = NULL;\n", walker->loader_out);
+  }
+  fputs("  }\n"
+        "  return ret;\n"
+        "}\n\n", walker->loader_out);
+  free(info);
+  return okay;
 }
 
 enum CXChildVisitResult visitor(CXCursor cursor, CXCursor parent,

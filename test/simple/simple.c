@@ -1,19 +1,21 @@
 #include "simple.h"
 #include <simple_loading.h>
+#include <stdbool.h>
 
 #include <yaml.h>
+#include <../common/test_common.h>
 
 static const char* input =
     "symbol: W\n"
     "people:\n"
-    "  - name: Peter Pan\n"
-    "    age: 12\n"
+    "  - name: Ada Lovelace\n"
+    "    age: 36\n"
     "    gender: female\n"
     "  - name: Karl Koch\n"
     "    age: 27\n"
     "    gender: male\n"
     "  - name: Scrooge McDuck\n"
-    "    age: blubber\n"
+    "    age: 75\n"
     "    gender: other\n";
 
 int main(int argc, char* argv[]) {
@@ -22,19 +24,28 @@ int main(int argc, char* argv[]) {
   yaml_parser_set_input_string(&parser, (const unsigned char*)input, strlen(input));
   struct root data;
   char* ret = load_one(&data, &parser);
+  yaml_parser_delete(&parser);
 
   static const char* gender_repr[] = {"male", "female", "other"};
   if (ret) {
     fprintf(stderr, "error while loading YAML:\n%s\n", ret);
     return 1;
   } else {
-    printf("symbol = %c\nPersons:\n", data.symbol);
-    for (size_t i = 0; i < data.people.count; ++i) {
-      struct person* item = &data.people.data[i];
-      printf("  %s, %s, age %i\n", item->name, gender_repr[item->gender],
-             item->age);
-    }
-    yaml_parser_delete(&parser);
-    return 0;
+    bool success = true;
+    ASSERT_EQUALS_CHAR('W', data.symbol, success);
+
+    ASSERT_EQUALS_STRING("Ada Lovelace", data.people.data[0].name, success);
+    ASSERT_EQUALS_ENUM(FEMALE, data.people.data[0].gender, success, gender_repr);
+    ASSERT_EQUALS_INT(36, data.people.data[0].age, success);
+
+    ASSERT_EQUALS_STRING("Karl Koch", data.people.data[1].name, success);
+    ASSERT_EQUALS_ENUM(MALE, data.people.data[1].gender, success, gender_repr);
+    ASSERT_EQUALS_INT(27, data.people.data[1].age, success);
+
+    ASSERT_EQUALS_STRING("Scrooge McDuck", data.people.data[2].name, success);
+    ASSERT_EQUALS_ENUM(OTHER, data.people.data[2].gender, success, gender_repr);
+    ASSERT_EQUALS_INT(75, data.people.data[2].age, success);
+
+    return success ? 0 : 1;
   }
 }

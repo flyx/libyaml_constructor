@@ -30,6 +30,7 @@ List of stuff that currently should work:
  * `enum` at top-level
  * `char*` as string
  * dynamic lists (see below)
+ * tagged unions aka variant records (see below)
  * having reference to line and column in error messages
 
 List of stuff that currently does not work:
@@ -37,7 +38,6 @@ List of stuff that currently does not work:
  * serializing back to YAML
  * anonymous structs inside structs
  * pointer types (apart from strings and lists)
- * unions
  * any basic type other than `int` and `char`
  * reading the documentation (there is none apart from this Readme)
 
@@ -65,6 +65,12 @@ The following annotations exist:
  * `list`: for structs containing a `data` pointer as well as two
    unsigned values `count` and `capacity`. libyaml_mapper will treat the
    annotated struct as dynamically growing list of items.
+ * `variant`: for structs containing exactly two items; the first one
+   being an `enum` value and the second one being a `union`. This will
+   cause the struct to be treated as [tagged union][2]. The YAML input
+   value will be required to have a *local tag* matching the `repr` of
+   one of the enum's values. The YAML value will then be deserialized
+   into the union field with the same index as the specified enum value.
  * `repr`: takes a parameter. Currently only supported for enum values.
    Enum value will be loaded from the representation given as parameter.
    This means that the spelling of the enum value in the code will *not*
@@ -103,9 +109,27 @@ struct person_list {
   size_t capacity;
 };
 
+enum int_or_string_t {
+  //!repr int
+  INT_VALUE,
+  //!repr string
+  STRING_VALUE
+};
+
+//!variant
+struct int_or_string {
+  enum int_or_string_t type;
+  union {
+    int i;
+    //!string
+    char* s;
+  };
+};
+
 struct root {
   char symbol;
   struct person_list people;
+  struct int_or_string foo;
 };
 
 #endif
@@ -139,7 +163,8 @@ static const char* input =
     "    gender: male\n"
     "  - name: Scrooge McDuck\n"
     "    age: 75\n"
-    "    gender: other\n";
+    "    gender: other\n"
+    "foo: !int 42\n";
 
 int main(int argc, char* argv[]) {
   yaml_parser_t parser;
@@ -180,3 +205,4 @@ For an example, see [test/CMakeLists.txt](test/CMakeLists.txt).
 
 
  [1]: https://clang.llvm.org/doxygen/group__CINDEX.html
+ [2]: https://en.wikipedia.org/wiki/Tagged_union
