@@ -14,7 +14,7 @@ enum value_type {
   NO_VALUE
 };
 
-//!variant
+//!tagged
 struct field {
   enum value_type type;
 

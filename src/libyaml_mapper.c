@@ -68,21 +68,21 @@ typedef struct {
   size_t constants_count, cur;
   bool seen_union;
   const char* field_name;
-} variant_info_t;
+} tagged_info_t;
 
 static process_result_t enter_toplevel(walker_t*, CXCursor, exit_process_t*);
 static process_result_t enter_typedef(walker_t*, CXCursor, exit_process_t*);
 static process_result_t leave_struct(walker_t*, CXCursor);
 static process_result_t leave_list(walker_t*, CXCursor);
 static process_result_t leave_enum(walker_t*, CXCursor);
-static process_result_t leave_variant(walker_t*, CXCursor);
+static process_result_t leave_tagged(walker_t*, CXCursor);
 
 static process_result_t enter_struct_item(walker_t*, CXCursor, exit_process_t*);
 static process_result_t enter_list_item(walker_t*, CXCursor, exit_process_t*);
 static process_result_t enter_enum_item(walker_t*, CXCursor, exit_process_t*);
-static process_result_t enter_variant_item(walker_t*, CXCursor,
+static process_result_t enter_tagged_item(walker_t*, CXCursor,
                                            exit_process_t*);
-static process_result_t enter_variant_union_item(walker_t*, CXCursor,
+static process_result_t enter_tagged_union_item(walker_t*, CXCursor,
                                                  exit_process_t*);
 
 
@@ -132,13 +132,13 @@ static inline level_t list_level(CXCursor const parent) {
   return ret;
 }
 
-static inline level_t variant_level(CXCursor const parent) {
-  const level_t ret = {parent, {}, &enter_variant_item, NULL, false, NULL};
+static inline level_t tagged_level(CXCursor const parent) {
+  const level_t ret = {parent, {}, &enter_tagged_item, NULL, false, NULL};
   return ret;
 }
 
-static inline level_t variant_union_level(CXCursor const parent) {
-  const level_t ret = {parent, {}, &enter_variant_union_item, NULL, false, NULL};
+static inline level_t tagged_union_level(CXCursor const parent) {
+  const level_t ret = {parent, {}, &enter_tagged_union_item, NULL, false, NULL};
   return ret;
 }
 
@@ -429,7 +429,7 @@ static process_result_t enter_list_item(walker_t* const walker,
 static enum CXChildVisitResult enum_visitor(CXCursor cursor, CXCursor parent,
                                             CXClientData client_data) {
   (void)parent;
-  variant_info_t* info = (variant_info_t*) client_data;
+  tagged_info_t* info = (tagged_info_t*) client_data;
   const enum CXCursorKind kind = clang_getCursorKind(cursor);
   if (kind != CXCursor_EnumConstantDecl) {
     print_error(cursor,
@@ -443,27 +443,27 @@ static enum CXChildVisitResult enum_visitor(CXCursor cursor, CXCursor parent,
   return CXChildVisit_Continue;
 }
 
-static process_result_t enter_variant_item(walker_t* walker, CXCursor cursor,
-                                           exit_process_t* exit_process) {
+static process_result_t enter_tagged_item(walker_t* walker, CXCursor cursor,
+                                          exit_process_t* exit_process) {
   *exit_process = NULL;
   CXType t = clang_getCanonicalType(clang_getCursorType(cursor));
   process_result_t ret;
-  variant_info_t* info = (variant_info_t*)level(walker)->data;
+  tagged_info_t* info = (tagged_info_t*)level(walker)->data;
   if (info == NULL) {
     if (t.kind != CXType_Enum) {
-      print_error(cursor, "first field of variant struct must be an enum, "
+      print_error(cursor, "first field of tagged union must be an enum, "
                           "found a %s!\n",
                   clang_getCString(clang_getTypeSpelling(t)));
       ret = error;
     } else {
-      info = malloc(sizeof(variant_info_t));
+      info = malloc(sizeof(tagged_info_t));
       info->constants_count = 0;
       info->seen_union = false;
       clang_visitChildren(clang_getTypeDeclaration(t), &enum_visitor,
                           info);
       if (info->constants_count == 0) {
         print_error(cursor,
-                    "enum for variant struct must have at least one item!\n");
+                    "enum for tagged union must have at least one item!\n");
         ret = error;
       } else {
         info->field_name = clang_getCString(clang_getCursorSpelling(cursor));
@@ -472,12 +472,12 @@ static process_result_t enter_variant_item(walker_t* walker, CXCursor cursor,
       }
     }
   } else if (t.kind != CXType_Record) {
-    print_error(cursor, "second field of variant struct must be a union, "
+    print_error(cursor, "second field of tagged union must be a union, "
                         "found a %s!\n",
                 clang_getCString(clang_getTypeSpelling(t)));
     ret = error;
   } else if (info->seen_union) {
-    print_error(cursor, "variant struct must not have more than two fields!\n");
+    print_error(cursor, "tagged union must not have more than two fields!\n");
     ret = error;
   } else {
     fputs("  yaml_char_t* tag;\n"
@@ -496,7 +496,7 @@ static process_result_t enter_variant_item(walker_t* walker, CXCursor cursor,
             "14, event_spelling(cur->type));\n"
             "  }\n"
             "  if (tag[0] != '!' || tag[1] == '\\0') {\n"
-            "    return render_error(cur, \"value for variant struct must have"
+            "    return render_error(cur, \"value for tagged union must have"
             " specific local tag, got \\\"%s\\\"\", strlen((const char*)tag),"
             " (const char*)tag);\n"
             "  }\n", walker->loader_out);
@@ -504,12 +504,12 @@ static process_result_t enter_variant_item(walker_t* walker, CXCursor cursor,
             "  bool res = to_enum((const char*)(tag + 1), &value->%s);\n",
             info->field_name);
     fputs("  if (!res) {\n"
-          "    return render_error(cur, \"not a valid variant: \\\"%s\\\"\","
+          "    return render_error(cur, \"not a valid tag: \\\"%s\\\"\","
           " strlen((const char*)tag), (const char*)tag);\n"
           "  }\n"
           "  char* ret = NULL;\n", walker->loader_out);
     fprintf(walker->loader_out, "  switch(value->%s) {\n", info->field_name);
-    push_level(walker, variant_union_level(cursor));
+    push_level(walker, tagged_union_level(cursor));
     info->seen_union = true;
     info->cur = 0;
     ret = okay;
@@ -517,7 +517,7 @@ static process_result_t enter_variant_item(walker_t* walker, CXCursor cursor,
   return ret;
 }
 
-static process_result_t enter_variant_union_item
+static process_result_t enter_tagged_union_item
     (walker_t* const walker, CXCursor const cursor,
      exit_process_t* const exit_process) {
   *exit_process = NULL;
@@ -534,8 +534,8 @@ static process_result_t enter_variant_union_item
   }
   const char* const name = clang_getCString(clang_getCursorSpelling(cursor));
 
-  variant_info_t* info =
-      (variant_info_t*) walker->levels[walker->cur_level - 1].data;
+  tagged_info_t* info =
+      (tagged_info_t*) walker->levels[walker->cur_level - 1].data;
 
   process_result_t ret;
   char* impl = gen_field_deserialization(name, cursor, "cur");
@@ -565,9 +565,9 @@ static process_result_t enter_struct_decl(walker_t* const walker,
       *exit_process = &leave_list;
       push_level(walker, list_level(cursor));
       ret = okay;
-    } else if (!strcmp(annotation.name, "variant")) {
-      *exit_process = &leave_variant;
-      push_level(walker, variant_level(cursor));
+    } else if (!strcmp(annotation.name, "tagged")) {
+      *exit_process = &leave_tagged;
+      push_level(walker, tagged_level(cursor));
       ret = okay;
     } else {
       print_error(cursor, "Unknown annotation: %s", annotation.name);
@@ -875,9 +875,9 @@ static process_result_t leave_list(walker_t* const walker,
   return ret;
 }
 
-static process_result_t leave_variant(walker_t* walker, CXCursor cursor) {
-  variant_info_t* info =
-      (variant_info_t*) walker->levels[walker->cur_level + 1].data;
+static process_result_t leave_tagged(walker_t* walker, CXCursor cursor) {
+  tagged_info_t* info =
+      (tagged_info_t*) walker->levels[walker->cur_level + 1].data;
 
   (void)cursor;
   bool seen_empty_variants = false;
@@ -889,8 +889,8 @@ static process_result_t leave_variant(walker_t* walker, CXCursor cursor) {
   if (seen_empty_variants) {
     fputs("      if (cur->type != YAML_SCALAR_EVENT ||\n"
           "          (cur->data.scalar.value[0] != '\\0')) {\n"
-          "        ret = render_error(cur, \"variant does not allow content\","
-          " 0);\n"
+          "        ret = render_error(cur, \"tag %s does not allow content\","
+          " strlen((const char*)tag), (const char*)tag);\n"
           "      } else ret = NULL;\n", walker->loader_out);
   }
   fputs("  }\n"

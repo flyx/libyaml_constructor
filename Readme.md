@@ -30,7 +30,7 @@ List of stuff that currently should work:
  * `enum` at top-level
  * `char*` as string
  * dynamic lists (see below)
- * tagged unions aka variant records (see below)
+ * [tagged unions][2] (see below)
  * having reference to line and column in error messages
 
 List of stuff that currently does not work:
@@ -65,12 +65,15 @@ The following annotations exist:
  * `list`: for structs containing a `data` pointer as well as two
    unsigned values `count` and `capacity`. libyaml_mapper will treat the
    annotated struct as dynamically growing list of items.
- * `variant`: for structs containing exactly two items; the first one
+ * `tagged`: for structs containing exactly two items; the first one
    being an `enum` value and the second one being a `union`. This will
    cause the struct to be treated as [tagged union][2]. The YAML input
    value will be required to have a *local tag* matching the `repr` of
-   one of the enum's values. The YAML value will then be deserialized
-   into the union field with the same index as the specified enum value.
+   one of the enum's values, prepended by a `!` (to be a local tag). The
+   YAML value will then be deserialized into the union field with the
+   same index as the specified enum value. If there are more enum values
+   than union fields, the surplus values will have no content and must
+   be given in the YAML as empty string with the respective local tag.
  * `repr`: takes a parameter. Currently only supported for enum values.
    Enum value will be loaded from the representation given as parameter.
    This means that the spelling of the enum value in the code will *not*
@@ -116,7 +119,7 @@ enum int_or_string_t {
   STRING_VALUE
 };
 
-//!variant
+//!tagged
 struct int_or_string {
   enum int_or_string_t type;
   union {
