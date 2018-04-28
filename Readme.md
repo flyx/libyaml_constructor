@@ -29,6 +29,8 @@ List of stuff that currently should work:
  * `struct` at top-level, with fields containing anything from this list
  * `enum` at top-level
  * `char*` as string
+ * pointers to anything on this list apart from pointers
+   (**note:** allocated things are currently not properly deallocated!)
  * dynamic lists (see below)
  * [tagged unions][2] (see below)
  * having reference to line and column in error messages
@@ -37,7 +39,6 @@ List of stuff that currently does not work:
 
  * serializing back to YAML
  * anonymous structs inside structs
- * pointer types (apart from strings and lists)
  * any basic type other than `int` and `char`
  * reading the documentation (there is none apart from this Readme)
 

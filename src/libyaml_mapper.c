@@ -165,15 +165,15 @@ static void print_error(CXCursor const cursor, const char* message, ...) {
 }
 
 static char* new_deserialization(const char* const field, const char* type,
-                                 const char* event_ref) {
+                                 const char* event_ref, const bool is_pointer) {
   static const char template[] =
-      "ret = construct_%s(&value->%s, parser, %s);\n";
+      "ret = construct_%s(%svalue->%s, parser, %s);\n";
   const size_t tmpl_len = sizeof(template) - 1;
 
   const size_t res_len = tmpl_len + strlen(field) + strlen(type) +
-                         strlen(event_ref) - 5;
+                         strlen(event_ref) - 7 + (is_pointer ? 0 : 1);
   char* ret = malloc(res_len);
-  sprintf(ret, template, type, field, event_ref);
+  sprintf(ret, template, type, is_pointer ? "" : "&", field, event_ref);
   return ret;
 }
 
@@ -250,11 +250,9 @@ static dea_node_t* include_name(dea_t* const dea, const char* name) {
   return cur_node;
 }
 
-static char* gen_field_deserialization(const char* const name,
-                                       CXCursor const cursor,
-                                       const char* event_ref) {
-  const CXType t = clang_getCanonicalType(clang_getCursorType(cursor));
-
+static char* gen_deserialization(const char* const name, CXCursor const cursor,
+                                 CXType const t, const char* event_ref,
+                                 const bool is_pointer) {
   annotation_t annotation;
   bool success = get_annotation(cursor, false, &annotation);
   if (!success) return NULL;
@@ -273,8 +271,10 @@ static char* gen_field_deserialization(const char* const name,
           print_error(cursor, "'!string' must be applied on a char pointer "
                               "(found on a '%s')!\n",
                       clang_getCString(clang_getTypeSpelling(t)));
+          ret = NULL;
+        } else {
+          ret = new_deserialization(name, "string", event_ref, is_pointer);
         }
-        ret = new_deserialization(name, "string", event_ref);
       }
     } else {
       print_error(cursor, "Unknown annotation: '%s'", annotation.name);
@@ -285,23 +285,52 @@ static char* gen_field_deserialization(const char* const name,
   } else {
     switch (t.kind) {
       case CXType_Int:
-        return new_deserialization(name, "int", event_ref);
+        return new_deserialization(name, "int", event_ref, is_pointer);
       case CXType_Char_S:
-        return new_deserialization(name, "char", event_ref);
+        return new_deserialization(name, "char", event_ref, is_pointer);
       case CXType_Record:
         // TODO: ensure a loader for this record exists
         return new_deserialization(name, raw_name(clang_getTypeSpelling(t)),
-            event_ref);
+                                   event_ref, is_pointer);
       case CXType_Enum:
         // TODO: ensure a loader for this enum exists
         return new_deserialization(name, raw_name(clang_getTypeSpelling(t)),
-            event_ref);
+                                   event_ref, is_pointer);
+      case CXType_Pointer: {
+        CXType const pointee = clang_getPointeeType(t);
+        if (pointee.kind == CXType_Pointer) {
+          print_error(cursor, "pointer to pointer not supported.");
+          return NULL;
+        }
+        char* value_deserialization =
+            gen_deserialization(name, cursor, pointee, event_ref, true);
+        size_t const value_deser_len = strlen(value_deserialization);
+        static const char malloc_templ[] =
+            "value->%s = malloc(sizeof(%s));\n          %s"
+            "          if (ret != NULL) free(value->%s);\n";
+        const char* type_name =
+            clang_getCString(clang_getTypeSpelling(pointee));
+        size_t full_len = sizeof(malloc_templ) - 8 + value_deser_len +
+                          strlen(name) * 2 + strlen(type_name);
+        char* buffer = malloc(full_len);
+        sprintf(buffer, malloc_templ, name, type_name, value_deserialization,
+                name);
+        free(value_deserialization);
+        return buffer;
+      }
       default:
         print_error(cursor, "Target type not implemented: %s",
                     clang_getCString(clang_getTypeSpelling(t)));
         return NULL;
     }
   }
+}
+
+static char* gen_field_deserialization(const char* const name,
+                                       CXCursor const cursor,
+                                       const char* event_ref) {
+  const CXType t = clang_getCanonicalType(clang_getCursorType(cursor));
+  return gen_deserialization(name, cursor, t, event_ref, false);
 }
 
 static process_result_t enter_struct_item(walker_t* const walker,
@@ -603,7 +632,7 @@ static process_result_t enter_def_level(walker_t* const walker,
 
   process_result_t ret;
   const char* actual_name = clang_getCString(clang_getCursorSpelling(cursor));
-  if (actual_name[0] == '\0') {
+  if (actual_name[0] == '\0' && typedef_name == NULL) {
     // ignore anonymous struct/enum at top level
     // (probably a typedef, will be handled there)
     *exit_process = NULL;
@@ -682,8 +711,8 @@ static void process_struct_nodes(walker_t* const walker,
       index++;
       fputs(dea->nodes[i]->loader_implementation, walker->loader_out);
       free(dea->nodes[i]->loader_implementation);
-      fputs("          }\n"
-            "          break;\n", walker->loader_out);
+      fputs("        }\n"
+            "        break;\n", walker->loader_out);
     }
     free(dea->nodes[i]);
   }
