@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
 #include <clang-c/Index.h>
 
 struct walker_struct;
@@ -95,12 +96,14 @@ static inline dea_node_t* new_node(const char* name) {
 }
 
 static inline level_t top_level(CXCursor parent) {
-  const level_t ret = {parent, {}, &enter_toplevel, NULL, false, NULL};
+  const level_t ret = {.parent=parent, .enter=&enter_toplevel, .leave=NULL,
+                       .entered=false, .data=NULL};
   return ret;
 }
 
 static inline level_t typedef_level(CXCursor parent, const char* name) {
-  const level_t ret = {parent, {}, &enter_typedef, NULL, false, (void*)name};
+  const level_t ret = {.parent=parent, .enter=&enter_typedef, .leave=NULL,
+                       .entered=false, .data=(void*)name};
   return ret;
 }
 
@@ -108,7 +111,8 @@ static inline level_t struct_level(CXCursor const parent) {
   dea_t* const dea = malloc(sizeof(dea_t));
   dea->count = 1;
   dea->nodes[0] = new_node(NULL);
-  const level_t ret = {parent, {}, &enter_struct_item, NULL, false, dea};
+  const level_t ret = {.parent=parent, .enter=&enter_struct_item, .leave=NULL,
+                       .entered=false, .data=dea};
   return ret;
 }
 
@@ -118,7 +122,8 @@ static inline level_t enum_level(CXCursor const parent,
   info->typedef_name = typedef_name;
   info->dea.count = 1;
   info->dea.nodes[0] = new_node(NULL);
-  const level_t ret = {parent, {}, &enter_enum_item, NULL, false, info};
+  const level_t ret = {.parent=parent, .enter=&enter_enum_item, .leave=NULL,
+                       .entered=false, .data=info};
   return ret;
 }
 
@@ -127,18 +132,20 @@ static inline level_t list_level(CXCursor const parent) {
   list_info->seen_capacity = false;
   list_info->seen_count = false;
   list_info->data_type.kind = CXType_Unexposed;
-  const level_t ret =
-      {parent, {}, &enter_list_item, NULL, false, list_info};
+  const level_t ret = {.parent=parent, .enter=&enter_list_item, .leave=NULL,
+                       .entered=false, .data=list_info};
   return ret;
 }
 
 static inline level_t tagged_level(CXCursor const parent) {
-  const level_t ret = {parent, {}, &enter_tagged_item, NULL, false, NULL};
+  const level_t ret = {.parent=parent, .enter=&enter_tagged_item, .leave=NULL,
+                       .entered=false, .data=NULL};
   return ret;
 }
 
 static inline level_t tagged_union_level(CXCursor const parent) {
-  const level_t ret = {parent, {}, &enter_tagged_union_item, NULL, false, NULL};
+  const level_t ret = {.parent=parent, .enter=&enter_tagged_union_item,
+                       .leave=NULL, .entered=false, .data=NULL};
   return ret;
 }
 
@@ -680,7 +687,7 @@ static process_result_t enter_typedef(walker_t* const walker,
 
 static void put_control_table(walker_t* const walker, const dea_t* const dea) {
   fputs("  static const int8_t table[][256] = {\n", walker->loader_out);
-  for(int i = 0; i < dea->count; ++i) {
+  for(size_t i = 0; i < dea->count; ++i) {
     fputs("      {", walker->loader_out);
     for(int j = 0; j < 256; ++j) {
       if (j > 0) fputs(", ", walker->loader_out);
@@ -1091,8 +1098,8 @@ int main(const int argc, const char* argv[]) {
   }
   
   CXCursor cursor = clang_getTranslationUnitCursor(unit);
-  walker_t walker = {{}, -1, fopen(output_impl_path, "w"),
-                     false, root_name, {CXType_Unexposed, NULL}};
+  walker_t walker = {.cur_level=-1, .loader_out=fopen(output_impl_path, "w"),
+                     .got_errors=false, .rootName=root_name, .rootType={CXType_Unexposed, NULL}};
   if (walker.loader_out == NULL) {
     fprintf(stderr, "Unable to open '%s' for writing.\n", output_impl_path);
     return 1;

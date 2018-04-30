@@ -50,7 +50,7 @@ static char* escape(const char* const string, size_t* const size) {
 
 #define APPEND(list, ptr) { \
   if ((list)->count == (list)->capacity) { \
-    typeof((list)->data) newlist = malloc(sizeof(*(list)->data) * (list)->capacity * 2); \
+    void* const newlist = malloc(sizeof(*(list)->data) * (list)->capacity * 2); \
     memcpy(newlist, (list)->data, sizeof(*(list)->data) * (list)->capacity); \
     free((list)->data); \
     (list)->data = newlist; \
