@@ -8,7 +8,7 @@ given header.
 It consists of two parts:
 
  * The **libyaml_mapper** executable generates the code.
- * The `loader_common.h` header is included by the generated code.
+ * The `libyaml_mapper_common.h` header is included by the generated code.
    You need to provide access to it via `-I` when compiling the
    generated code.
 
