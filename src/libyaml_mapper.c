@@ -281,11 +281,11 @@ typedef struct {
   int enum_type_id;
 } tagged_info_t;
 
-static const char* annotation_names[] = {
+static char const *const annotation_names[] = {
     "", "string", "list", "tagged", "repr"
 };
 
-static const bool annotation_has_param[] = {
+static bool const annotation_has_param[] = {
     false, false, false, false, true
 };
 
@@ -879,7 +879,6 @@ bool gen_list_impls(type_descriptor_t const *const type_descriptor,
           "    char* ret = %.*s(item, parser, &event);\n"
           "    yaml_event_delete(&event);\n"
           "    if (ret) {\n"
-          "      free(item);\n"
           "      value->count--;\n",
           complete_name, complete_name,
           (int)inner_type->constructor_name_len,
@@ -1489,7 +1488,7 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
     }
   }
   fputs("};\n"
-        "  static const char* names[] = {", out);
+        "  static char const *const names[] = {", out);
   first = true;
   for (size_t i = 0; i < dea.count; i++) {
     if (dea.nodes[i]->loader_implementation != NULL) {

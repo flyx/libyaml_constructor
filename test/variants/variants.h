@@ -10,6 +10,8 @@ enum value_type {
   INT_VALUE,
   //!repr string
   STRING_VALUE,
+  //!repr intptr
+  INT_PTR_VALUE,
   //!repr none
   NO_VALUE
 };
@@ -23,6 +25,7 @@ struct field {
     int i;
     //!string
     char* s;
+    int* iptr;
   };
 };
 
