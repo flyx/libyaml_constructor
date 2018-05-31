@@ -140,6 +140,35 @@ static char* construct_int(int * const value, yaml_parser_t* const parser,
   return NULL;
 }
 
+static char* construct_size(size_t *const value, yaml_parser_t *const parser,
+                            yaml_event_t* cur) {
+  (void)parser;
+  if (cur->type != YAML_SCALAR_EVENT) {
+    return wrong_event_error(YAML_SCALAR_EVENT, cur);
+  }
+  char* result;
+  unsigned long long res =
+      strtoull((const char*)cur->data.scalar.value, &result, 10);
+  if (*result != '\0') {
+    size_t escaped_len;
+    char *escaped = escape((const char *) cur->data.scalar.value, &escaped_len);
+    char *buffer = render_error(cur, "cannot read %s as size_t!", escaped_len,
+                                escaped);
+    free(escaped);
+    return buffer;
+  } else if (res > SIZE_MAX) {
+    size_t escaped_len;
+    char* escaped = escape((const char*)cur->data.scalar.value, &escaped_len);
+    char* buffer =
+        render_error(cur, "size_t value of %s outside representable range!",
+                     escaped_len, escaped);
+    free(escaped);
+    return buffer;
+  }
+  *value = (size_t)res;
+  return NULL;
+}
+
 static char* construct_string(char** const value, yaml_parser_t* const parser,
                          yaml_event_t* cur) {
   (void)parser;

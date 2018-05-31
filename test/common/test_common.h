@@ -42,4 +42,18 @@
   }\
 }
 
+#define ASSERT_NOT_NULL(actual, res) {\
+  if ((actual) == NULL) {\
+    fprintf(stderr, "missing value for \"%s\".\n", #actual);\
+    (res) = false;\
+  }\
+}
+
+#define ASSERT_NULL(actual, res) {\
+  if ((actual) != NULL) {\
+    fprintf(stderr, "got value for \"%s\" (expected NULL).\n", #actual);\
+    (res) = false;\
+  }\
+}
+
 #endif

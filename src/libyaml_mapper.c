@@ -45,6 +45,25 @@ typedef struct {
 
 // ---------- List of Types -------------
 
+typedef enum {
+  /*
+   * Type is a value type, i.e. no pointer of any kind.
+   */
+  PTR_NONE,
+  /*
+   * Type is a string, i.e. a pointer to a null-terminated char sequence.
+   */
+  PTR_STRING_VALUE,
+  /*
+   * Type is an optional value, i.e. may be either null or point to a value.
+   */
+  PTR_OPTIONAL_VALUE,
+  /*
+   * Type points to a value and may never be null.
+   */
+  PTR_OBJECT_POINTER
+} ptr_kind;
+
 /*
  * These flags describe the usage of a type.
  * They may be local to a struct field or similar entity.
@@ -52,24 +71,20 @@ typedef struct {
  */
 typedef struct {
   /*
-   * Type is a string, i.e. a pointer to a null-terminated char sequence.
-   */
-  bool string : 1;
-  /*
    * Type is a list, i.e. a struct that has data, count and capacity fields and
    * is used as dynamic list of values.
    */
-  bool list : 1;
+  bool list;
   /*
    * Type is a tagged union, i.e. a struct that contains an enum value and a
    * union value. The enum value defines which of the union's fields is valid.
    */
-  bool tagged : 1;
+  bool tagged;
   /*
    * Type is a actually a pointer to the type_descriptor_t.type. Field value
    * gets allocated during loading.
    */
-  bool pointer : 1;
+  ptr_kind pointer;
 } type_flags_t;
 
 #define CONSTRUCTOR_PREFIX "static char*"
@@ -172,6 +187,10 @@ typedef struct {
    * contains the name of the field iff this is a final node.
    */
   const char* loader_item_name;
+  /*
+   * true iff this is a final node and the value is declared as optional.
+   */
+  bool optional;
 } struct_dfa_node_t;
 
 /*
@@ -208,12 +227,13 @@ typedef struct {
  * Known annotations
  */
 typedef enum {
-  NO_ANNOTATION = 0,
-  STRING_ANNOTATION = 1,
-  LIST_ANNOTATION = 2,
-  TAGGED_ANNOTATION = 3,
-  REPR_ANNOTATION = 4,
-  ANNOTATION_END = 5
+  ANN_NONE = 0,
+  ANN_STRING = 1,
+  ANN_LIST = 2,
+  ANN_TAGGED = 3,
+  ANN_REPR = 4,
+  ANN_OPTIONAL = 5,
+  ANN_ENUM_END = 6
 } annotation_kind_t;
 
 /*
@@ -282,11 +302,11 @@ typedef struct {
 } tagged_info_t;
 
 static char const *const annotation_names[] = {
-    "", "string", "list", "tagged", "repr"
+    "", "string", "list", "tagged", "repr", "optional"
 };
 
 static bool const annotation_has_param[] = {
-    false, false, false, false, true
+    false, false, false, false, true, false
 };
 
 /*
@@ -325,11 +345,11 @@ static void print_error(CXCursor const cursor, char const *const message, ...) {
  */
 static bool get_annotation(CXCursor const cursor,
                            annotation_t *const annotation) {
-  static size_t annotation_len[ANNOTATION_END] = {1};
+  static size_t annotation_len[ANN_ENUM_END] = {1};
   if (annotation_len[0] == 1) {
-    // len of NO_ANNOTATION must be 0, so the list is not properly initialized
+    // len of ANN_NONE must be 0, so the list is not properly initialized
     // yet. do this here.
-    for (int i = 0; i < ANNOTATION_END; ++i) {
+    for (int i = 0; i < ANN_ENUM_END; ++i) {
       annotation_len[i] = strlen(annotation_names[i]);
     }
   }
@@ -341,7 +361,7 @@ static bool get_annotation(CXCursor const cursor,
   if (comment != NULL && comment[2] == '!') {
     char const *const start = comment + 3;
     int i;
-    for (i = 0; i < ANNOTATION_END; ++i) {
+    for (i = 0; i < ANN_ENUM_END; ++i) {
       if (ANNOTATION_IS(i)) {
         annotation->kind = (annotation_kind_t) i;
         if (annotation_has_param[i]) break;
@@ -351,7 +371,7 @@ static bool get_annotation(CXCursor const cursor,
         }
       }
     }
-    if (i == ANNOTATION_END) {
+    if (i == ANN_ENUM_END) {
       char const *pos = start;
       while (*pos != ' ' && *pos != '\r' && *pos != '\n' && *pos != '\0') pos++;
       print_error(cursor, "unknown annotation: \"%.*s\"", pos - start, start);
@@ -375,7 +395,7 @@ static bool get_annotation(CXCursor const cursor,
     memcpy(annotation->param, param_start, param_len);
     annotation->param[param_len] = '\0';
   } else {
-    annotation->kind = NO_ANNOTATION;
+    annotation->kind = ANN_NONE;
     annotation->param = NULL;
   }
   return true;
@@ -442,7 +462,7 @@ static int find(typename_dfa_t const *const dfa, char const *const name) {
 static bool gen_type_descriptor(CXCursor const cursor, CXType const type,
                                 type_descriptor_t *const result,
                                 annotation_t const *const annotation) {
-  if (annotation->kind == REPR_ANNOTATION) {
+  if (annotation->kind == ANN_REPR) {
     print_error(cursor, "!repr annotation cannot be applied on %s\n",
                 clang_getCString(clang_getTypeKindSpelling(type.kind)));
     free(annotation->param);
@@ -450,10 +470,11 @@ static bool gen_type_descriptor(CXCursor const cursor, CXType const type,
   }
 
   result->type = type;
-  result->flags.string = (annotation->kind == STRING_ANNOTATION);
-  result->flags.list = (annotation->kind == LIST_ANNOTATION);
-  result->flags.tagged = (annotation->kind == TAGGED_ANNOTATION);
-  result->flags.pointer = false;
+  result->flags.list = (annotation->kind == ANN_LIST);
+  result->flags.tagged = (annotation->kind == ANN_TAGGED);
+  result->flags.pointer = (annotation->kind == ANN_OPTIONAL) ?
+      PTR_OPTIONAL_VALUE : (annotation->kind == ANN_STRING) ? PTR_STRING_VALUE :
+                           PTR_NONE;
   return true;
 }
 
@@ -464,7 +485,6 @@ static bool gen_type_descriptor(CXCursor const cursor, CXType const type,
 static bool equal_type_descriptors(type_descriptor_t const left,
                                    type_descriptor_t const right) {
   return clang_equalTypes(left.type, right.type) &&
-         left.flags.string == right.flags.string &&
          left.flags.list == right.flags.list &&
          left.flags.tagged == right.flags.tagged &&
          left.flags.pointer == right.flags.pointer;
@@ -758,6 +778,14 @@ static enum CXChildVisitResult list_visitor
   char const *const name = clang_getCString(clang_getCursorSpelling(cursor));
   CXType const t = clang_getCanonicalType(clang_getCursorType(cursor));
 
+  annotation_t annotation;
+  get_annotation(cursor, &annotation);
+  if (annotation.kind != ANN_NONE) {
+    print_error(cursor, "list fields may not carry annotations!\n");
+    if (annotation_has_param[annotation.kind]) free(annotation.param);
+    LIST_VISITOR_ERROR;
+  }
+
   if (!strcmp(name, "data")) {
     if (t.kind != CXType_Pointer) {
       print_error(cursor, "data field of list must be a pointer!\n");
@@ -810,7 +838,7 @@ static char* render_destructor_call
   if (type_descriptor->destructor_decl != NULL) {
     chars_needed += type_descriptor->destructor_name_len + subject_len + 4;
   }
-  if (type_descriptor->flags.pointer || type_descriptor->flags.string) {
+  if (type_descriptor->flags.pointer != PTR_NONE) {
     chars_needed += sizeof("free();") - 1 + subject_len;
   }
   if (chars_needed == 1) return NULL;
@@ -820,9 +848,10 @@ static char* render_destructor_call
     cur += sprintf(ret, "%.*s(%s%s);",
         (int)type_descriptor->destructor_name_len,
         type_descriptor->destructor_decl + sizeof(DESTRUCTOR_PREFIX),
-        (type_descriptor->flags.pointer || is_ref) ? "" : "&", subject);
+        (type_descriptor->flags.pointer != PTR_NONE || is_ref) ? "" : "&",
+                   subject);
   }
-  if (type_descriptor->flags.pointer || type_descriptor->flags.string) {
+  if (type_descriptor->flags.pointer != PTR_NONE) {
     sprintf(cur, "free(%s);", subject);
   }
   return ret;
@@ -947,7 +976,7 @@ static char* gen_deserialization(char const *const name,
   return new_deserialization
       (name, type_descriptor->constructor_decl + sizeof(CONSTRUCTOR_PREFIX),
        type_descriptor->constructor_name_len, event_ref,
-       type_descriptor->flags.pointer);
+       type_descriptor->flags.pointer != PTR_NONE);
 }
 
 /*
@@ -962,8 +991,9 @@ static bool describe_field(CXCursor const cursor,
   annotation_t annotation;
   bool success = get_annotation(cursor, &annotation);
   if (!success) return false;
+  ptr_kind pointer_kind = PTR_OBJECT_POINTER;
   switch (annotation.kind) {
-    case STRING_ANNOTATION: {
+    case ANN_STRING: {
       if (t.kind != CXType_Pointer) {
         print_error(cursor, "'!string'  a char pointer "
                             "(found on a '%s')!\n",
@@ -977,10 +1007,9 @@ static bool describe_field(CXCursor const cursor,
                     clang_getCString(clang_getTypeKindSpelling(t.kind)));
         return false;
       } else {
-        ret->flags.string = true;
         ret->flags.list = false;
         ret->flags.tagged = false;
-        ret->flags.pointer = false;
+        ret->flags.pointer = PTR_STRING_VALUE;
         ret->constructor_decl = NULL;
         ret->constructor_name_len = 0;
         ret->destructor_decl = NULL;
@@ -990,7 +1019,14 @@ static bool describe_field(CXCursor const cursor,
         return true;
       }
     }
-    case NO_ANNOTATION:
+    case ANN_OPTIONAL:
+      if (t.kind != CXType_Pointer) {
+        print_error(cursor, "!optional must be applied on a pointer type.");
+        return false;
+      }
+      pointer_kind = PTR_OPTIONAL_VALUE;
+      // intentional fall-through
+    case ANN_NONE:
       if (t.kind == CXType_Pointer) {
         CXType const pointee = clang_getPointeeType(t);
         if (pointee.kind == CXType_Pointer) {
@@ -1005,7 +1041,7 @@ static bool describe_field(CXCursor const cursor,
           return false;
         }
         *ret = types_list->data[type_index];
-        ret->flags.pointer = true;
+        ret->flags.pointer = pointer_kind;
         ret->spelling = type_name;
         return true;
       } else {
@@ -1035,27 +1071,30 @@ static bool describe_field(CXCursor const cursor,
 static char* gen_field_deserialization
     (char const *const name, type_descriptor_t const *const descriptor,
      char const *const event_ref) {
-  if (descriptor->flags.string) {
+  switch (descriptor->flags.pointer) {
+    case PTR_STRING_VALUE:
         return new_deserialization(name, "construct_string",
                                    sizeof("construct_string") - 1,
                                    event_ref, false);
-  } else if (descriptor->flags.pointer) {
-    char *const value_deserialization =
-        gen_deserialization(name, descriptor, event_ref);
-    if (value_deserialization == NULL) return NULL;
-    size_t const value_deser_len = strlen(value_deserialization);
-    static char const malloc_templ[] =
-        "value->%s = malloc(sizeof(%s));\n          %s"
-        "          if (ret != NULL) free(value->%s);\n";
-    size_t const full_len = sizeof(malloc_templ) - 8 + value_deser_len +
-        strlen(name) * 2 + strlen(descriptor->spelling);
-    char *const buffer = malloc(full_len);
-    sprintf(buffer, malloc_templ, name, descriptor->spelling,
-            value_deserialization, name);
-    free(value_deserialization);
-    return buffer;
-  } else {
-    return gen_deserialization(name, descriptor, event_ref);
+    case PTR_OBJECT_POINTER:
+    case PTR_OPTIONAL_VALUE: {
+      char *const value_deserialization =
+          gen_deserialization(name, descriptor, event_ref);
+      if (value_deserialization == NULL) return NULL;
+      size_t const value_deser_len = strlen(value_deserialization);
+      static char const malloc_templ[] =
+          "value->%s = malloc(sizeof(%s));\n          %s"
+          "          if (ret != NULL) free(value->%s);\n";
+      size_t const full_len = sizeof(malloc_templ) - 8 + value_deser_len +
+                              strlen(name) * 2 + strlen(descriptor->spelling);
+      char *const buffer = malloc(full_len);
+      sprintf(buffer, malloc_templ, name, descriptor->spelling,
+              value_deserialization, name);
+      free(value_deserialization);
+      return buffer;
+    }
+    default:
+      return gen_deserialization(name, descriptor, event_ref);
   }
 }
 
@@ -1295,6 +1334,7 @@ static inline struct_dfa_node_t* new_node(char const *const name) {
   val->destructor_implementation = NULL;
   val->loader_item_name = name;
   val->destructor_implementation = NULL;
+  val->optional = false;
   return val;
 }
 
@@ -1369,6 +1409,8 @@ static enum CXChildVisitResult field_visitor
   cur_node->destructor_implementation =
       render_destructor_call(&descriptor, accessor, false);
   free(accessor);
+
+  cur_node->optional = descriptor.flags.pointer == PTR_OPTIONAL_VALUE;
   return CXChildVisit_Continue;
 }
 
@@ -1488,6 +1530,20 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
     }
   }
   fputs("};\n"
+        "  static const bool optional[] = {", out);
+  for (size_t i = 0; i < dea.count; i++) {
+    if (dea.nodes[i]->loader_implementation != NULL) {
+      if (first) first = false;
+      else fputs(", ", out);
+      fputs(dea.nodes[i]->optional ? "true" : "false", out);
+    }
+  }
+  for (size_t i = 0; i < dea.count; i++) {
+    if (dea.nodes[i]->optional) {
+      fprintf(out, "value->%s = null;\n", dea.nodes[i]->loader_item_name);
+    }
+  }
+  fputs("};\n"
         "  static char const *const names[] = {", out);
   first = true;
   for (size_t i = 0; i < dea.count; i++) {
@@ -1528,7 +1584,7 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
         "  yaml_event_delete(&key);\n"
         "  if (!ret) {\n"
         "    for (size_t i = 0; i < sizeof(found); i++) {\n"
-        "      if (!found[i]) {\n"
+        "      if (!found[i] && !optional[i]) {\n"
         "        const size_t name_len = strlen(names[i]);\n"
         "        ret = render_error(cur, \"missing value for field \\\"%s\\\"\","
         " name_len, names[i]);\n"
@@ -1586,10 +1642,10 @@ static enum CXChildVisitResult enum_visitor
   char const *representation = name;
 
   switch (annotation.kind) {
-    case REPR_ANNOTATION:
+    case ANN_REPR:
       representation = annotation.param;
       break;
-    case NO_ANNOTATION:
+    case ANN_NONE:
       break;
     default:
       print_error(cursor, "Unsupported annotation for enum constant: '%s'",
@@ -1599,7 +1655,7 @@ static enum CXChildVisitResult enum_visitor
   }
 
   struct_dfa_node_t *const cur_node = include_name(dea, representation);
-  if (annotation.kind == REPR_ANNOTATION) free(annotation.param);
+  if (annotation.kind == ANN_REPR) free(annotation.param);
   if (!cur_node) {
     dea->seen_error = true;
     return CXChildVisit_Break;
@@ -1728,8 +1784,7 @@ static void mark_as_predefined(type_descriptor_t *const descriptor) {
   descriptor->type.kind = CXType_Unexposed;
   descriptor->flags.tagged = false;
   descriptor->flags.list = false;
-  descriptor->flags.string = false;
-  descriptor->flags.pointer = false;
+  descriptor->flags.pointer = PTR_NONE;
   descriptor->converter_name_len = 0;
   descriptor->converter_decl = NULL;
 }
@@ -1776,8 +1831,15 @@ int main(int const argc, char const *argv[]) {
   mark_as_predefined(&char_descriptor);
   add_predefined(&types_list, "char", char_descriptor);
 
+  type_descriptor_t size_descriptor =
+      {.constructor_decl = "static char* construct_size",
+       .constructor_name_len = sizeof("construct_size"),
+       .destructor_decl = NULL, .destructor_name_len = 0};
+  mark_as_predefined(&size_descriptor);
+  add_predefined(&types_list, "size_t", size_descriptor);
+
   type_info_t type_info = {.list = &types_list};
-  type_info.recent_annotation.kind = NO_ANNOTATION;
+  type_info.recent_annotation.kind = ANN_NONE;
   type_info.recent_annotation.param = NULL;
   type_info.recent_def.kind = CXType_Unexposed;
   clang_visitChildren(cursor, &discover_types, &type_info);
