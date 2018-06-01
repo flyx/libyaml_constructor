@@ -10,7 +10,8 @@ static const char* input =
     "string: hello\n"
     "---\n"
     "string: world\n"
-    "i: 52\n";
+    "i: 52\n"
+    "optional_string: klaatu barada nikto";
 
 int main(int argc, char* argv[]) {
   yaml_parser_t parser;
@@ -33,11 +34,13 @@ int main(int argc, char* argv[]) {
     ASSERT_EQUALS_SIZE((size_t)255, data1.optional_object->value, success);
     ASSERT_NULL(data1.i, success);
     ASSERT_EQUALS_STRING("hello", data1.string, success);
+    ASSERT_NULL(data1.optional_string, success);
 
     ASSERT_NULL(data2.optional_object, success);
     ASSERT_NOT_NULL(data2.i, success);
     ASSERT_EQUALS_INT(52, *data2.i, success);
     ASSERT_EQUALS_STRING("world", data2.string, success);
+    ASSERT_EQUALS_STRING("klaatu barada nikto", data2.optional_string, success);
 
     return success ? 0 : 1;
   }

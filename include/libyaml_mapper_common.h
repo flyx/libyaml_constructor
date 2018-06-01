@@ -17,8 +17,10 @@
 
 #define walk(table, name, min, max, result)\
   int8_t walk__pos = 0;\
-  for(unsigned const char* walk__cur = name; *walk__cur != '\0' && walk__pos != -1; ++walk__cur) {\
-    walk__pos = table[walk__pos][(*walk__cur < min) ? 0 : ((*walk__cur > max) ? max : *walk__cur) - min];\
+  for(unsigned const char* walk__cur = name; *walk__cur != '\0' &&\
+      walk__pos != -1; ++walk__cur) {\
+    walk__pos = (table)[walk__pos][(*walk__cur < (min)) ? 0 :\
+        ((*walk__cur > (max)) ? (max) : *walk__cur) - (min)];\
   }\
   (result) = walk__pos
 
@@ -49,7 +51,7 @@ static char* escape(const char* const string, size_t* const size) {
 
 #define APPEND(list, ptr) { \
   if ((list)->count == (list)->capacity) { \
-    void* const newlist = malloc(sizeof(*(list)->data) * (list)->capacity * 2); \
+    void* const newlist = malloc(sizeof(*(list)->data) * (list)->capacity * 2);\
     memcpy(newlist, (list)->data, sizeof(*(list)->data) * (list)->capacity); \
     free((list)->data); \
     (list)->data = newlist; \
@@ -112,62 +114,77 @@ static char* wrong_event_error(yaml_event_type_t expected,
       event_spelling(actual->type), event_spelling(expected));
 }
 
-static char* construct_int(int * const value, yaml_parser_t* const parser,
-                      yaml_event_t* cur) {
-  (void)parser;
-  if (cur->type != YAML_SCALAR_EVENT) {
-    return wrong_event_error(YAML_SCALAR_EVENT, cur);
-  }
-  char* result;
-  long res = strtol((const char*)cur->data.scalar.value, &result, 10);
-  if (*result != '\0') {
-    size_t escaped_len;
-    char* escaped = escape((const char*)cur->data.scalar.value, &escaped_len);
-    char* buffer = render_error(cur, "cannot read %s as int!", escaped_len,
-                                escaped);
-    free(escaped);
-    return buffer;
-  } else if (res < INT_MIN || res > INT_MAX) {
-    size_t escaped_len;
-    char* escaped = escape((const char*)cur->data.scalar.value, &escaped_len);
-    char* buffer = render_error(cur,
-                                "int value of %s outside representable range!",
-                                escaped_len, escaped);
-    free(escaped);
-    return buffer;
-  }
-  *value = (int)res;
-  return NULL;
+#define DEFINE_INT_CONSTRUCTOR(name, value_type, min, max)\
+static char* name(value_type *const value, yaml_parser_t *const parser,\
+                  yaml_event_t* cur) {\
+  (void)parser;\
+  if (cur->type != YAML_SCALAR_EVENT) {\
+    return wrong_event_error(YAML_SCALAR_EVENT, cur);\
+  }\
+  char* result;\
+  long long res = strtoll((const char*)cur->data.scalar.value, &result, 10);\
+  if (*result != '\0') {\
+    size_t escaped_len;\
+    char* escaped = escape((const char*)cur->data.scalar.value, &escaped_len);\
+    char* buffer = render_error(cur, "cannot read %s as int!", escaped_len,\
+                                escaped);\
+    free(escaped);\
+    return buffer;\
+  } else if (res < min || res > max) {\
+    size_t escaped_len;\
+    char* escaped = escape((const char*)cur->data.scalar.value, &escaped_len);\
+    char* buffer = render_error(cur,\
+                                "int value of %s outside representable range!",\
+                                escaped_len, escaped);\
+    free(escaped);\
+    return buffer;\
+  }\
+  *value = (int)res;\
+  return NULL;\
 }
 
-static char* construct_size(size_t *const value, yaml_parser_t *const parser,
-                            yaml_event_t* cur) {
-  (void)parser;
-  if (cur->type != YAML_SCALAR_EVENT) {
-    return wrong_event_error(YAML_SCALAR_EVENT, cur);
-  }
-  char* result;
-  unsigned long long res =
-      strtoull((const char*)cur->data.scalar.value, &result, 10);
-  if (*result != '\0') {
-    size_t escaped_len;
-    char *escaped = escape((const char *) cur->data.scalar.value, &escaped_len);
-    char *buffer = render_error(cur, "cannot read %s as size_t!", escaped_len,
-                                escaped);
-    free(escaped);
-    return buffer;
-  } else if (res > SIZE_MAX) {
-    size_t escaped_len;
-    char* escaped = escape((const char*)cur->data.scalar.value, &escaped_len);
-    char* buffer =
-        render_error(cur, "size_t value of %s outside representable range!",
-                     escaped_len, escaped);
-    free(escaped);
-    return buffer;
-  }
-  *value = (size_t)res;
-  return NULL;
+DEFINE_INT_CONSTRUCTOR(construct_short, short, SHRT_MIN, SHRT_MAX)
+DEFINE_INT_CONSTRUCTOR(construct_int, int, INT_MIN, INT_MAX)
+DEFINE_INT_CONSTRUCTOR(construct_long, long, LONG_MIN, LONG_MAX)
+DEFINE_INT_CONSTRUCTOR(construct_long_long, long long, LONG_LONG_MIN,
+                       LONG_LONG_MAX)
+
+#define DEFINE_UNSIGNED_CONSTRUCTOR(name, value_type, max) \
+static char* name(value_type *const value, yaml_parser_t *const parser,\
+                  yaml_event_t* cur) {\
+  (void)parser;\
+  if (cur->type != YAML_SCALAR_EVENT) {\
+    return wrong_event_error(YAML_SCALAR_EVENT, cur);\
+  }\
+  char* result;\
+  unsigned long long res =\
+      strtoull((const char*)cur->data.scalar.value, &result, 10);\
+  if (*result != '\0') {\
+    size_t escaped_len;\
+    char *escaped = escape((const char *) cur->data.scalar.value, &escaped_len);\
+    char *buffer = render_error(cur, "cannot read %s as " #value_type "!",\
+                                escaped_len, escaped);\
+    free(escaped);\
+    return buffer;\
+  } else if (res > (max)) {\
+    size_t escaped_len;\
+    char* escaped = escape((const char*)cur->data.scalar.value, &escaped_len);\
+    char* buffer =\
+        render_error(cur, "size_t value of %s outside representable range!",\
+                     escaped_len, escaped);\
+    free(escaped);\
+    return buffer;\
+  }\
+  *value = (size_t)res;\
+  return NULL;\
 }
+
+DEFINE_UNSIGNED_CONSTRUCTOR(construct_unsigned_char, unsigned char, UCHAR_MAX)
+DEFINE_UNSIGNED_CONSTRUCTOR(construct_unsigned_short, unsigned short, USHRT_MAX)
+DEFINE_UNSIGNED_CONSTRUCTOR(construct_unsigned, unsigned, UINT_MAX)
+DEFINE_UNSIGNED_CONSTRUCTOR(construct_unsigned_long, unsigned long, ULLONG_MAX)
+DEFINE_UNSIGNED_CONSTRUCTOR(construct_unsigned_long_long, unsigned long long,
+                            ULLONG_MAX)
 
 static char* construct_string(char** const value, yaml_parser_t* const parser,
                          yaml_event_t* cur) {

@@ -24,13 +24,14 @@ when the YAML fails to load.
 
 List of stuff that currently should work:
 
- * `int`
- * `char`
- * `struct` at top-level, with fields containing anything from this list
+ * integer and unsigned types (`short`, `int`, `long`, `long long`,
+   `unsigned char`, `unsigned short`, `unsigned`, `unsigned long`,
+   `unsigned long long`)
+ * `char` (interpreted as ASCII-character)
+ * `struct` with fields containing anything from this list
  * `enum` at top-level
- * `char*` as string
- * pointers to anything on this list apart from pointers
-   (**note:** allocated things are currently not properly deallocated!)
+ * `char*` as string or optional string
+ * pointers to anything on this list apart from pointers, possibly optional
  * dynamic lists (see below)
  * [tagged unions][2] (see below)
  * having reference to line and column in error messages
@@ -39,7 +40,7 @@ List of stuff that currently does not work:
 
  * serializing back to YAML
  * anonymous structs inside structs
- * any basic type other than `int` and `char`
+ * floating point types
  * reading the documentation (there is none apart from this Readme)
 
 ## Usage
@@ -79,6 +80,10 @@ The following annotations exist:
    Enum value will be loaded from the representation given as parameter.
    This means that the spelling of the enum value in the code will *not*
    be accepted.
+ * `optional`: for fields of pointer types. Tells libyaml_mapper that this field
+   may be omitted in the YAML, in which case it will be `NULL` after loading.
+ * `optional_string`: for `char*` fields, works like `optional` but if given,
+   parses into a null-terminated string.
 
 ## Example
 
