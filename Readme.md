@@ -27,6 +27,7 @@ List of stuff that currently should work:
  * integer and unsigned types (`short`, `int`, `long`, `long long`,
    `unsigned char`, `unsigned short`, `unsigned`, `unsigned long`,
    `unsigned long long`)
+ * floating point types (`float`, `double`, `long double`)
  * `char` (interpreted as ASCII-character)
  * `bool` (taking the literals `true` and `false`)
  * `struct` with fields containing anything from this list
@@ -41,7 +42,6 @@ List of stuff that currently does not work:
 
  * serializing back to YAML
  * anonymous structs inside structs
- * floating point types
  * reading the documentation (there is none apart from this Readme)
 
 ## Usage
