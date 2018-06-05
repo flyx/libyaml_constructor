@@ -47,12 +47,12 @@ int main(int argc, char* argv[]) {
     ASSERT_EQUALS_STRING("Karl Koch", data.people.data[1].name, success);
     ASSERT_EQUALS_ENUM(MALE, data.people.data[1].gender, success, gender_repr);
     ASSERT_EQUALS_INT(27, data.people.data[1].age, success);
-    ASSERT_EQUALS_FLOAT(1.73, data.people.data[0].height, success);
+    ASSERT_EQUALS_FLOAT(1.73, data.people.data[1].height, success);
 
     ASSERT_EQUALS_STRING("Scrooge McDuck", data.people.data[2].name, success);
     ASSERT_EQUALS_ENUM(OTHER, data.people.data[2].gender, success, gender_repr);
     ASSERT_EQUALS_INT(75, data.people.data[2].age, success);
-    ASSERT_EQUALS_FLOAT(0.91, data.people.data[0].height, success);
+    ASSERT_EQUALS_FLOAT(0.91, data.people.data[2].height, success);
 
     return success ? 0 : 1;
   }
