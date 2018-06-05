@@ -1861,7 +1861,12 @@ int main(int const argc, char const *argv[]) {
   KNOWN_TYPE(unsigned long, construct_unsigned_long);
   KNOWN_TYPE(unsigned long long, construct_unsigned_long_long);
 
+  KNOWN_TYPE(float, construct_float);
+  KNOWN_TYPE(double, construct_double);
+  KNOWN_TYPE(long double, construct_long_double);
+
   KNOWN_TYPE(char, construct_char);
+  KNOWN_TYPE(_Bool, construct_bool);
 
   type_info_t type_info = {.list = &types_list};
   type_info.recent_annotation.kind = ANN_NONE;
@@ -1890,6 +1895,7 @@ int main(int const argc, char const *argv[]) {
   fprintf(out_impl,
           "#include <libyaml_mapper_common.h>\n"
           "#include <stdbool.h>\n"
+          "#include <locale.h>\n"
           "#include \"%s\"\n", config.output_header_name);
 
   write_decls(&types_list, out_impl);
@@ -1899,6 +1905,8 @@ int main(int const argc, char const *argv[]) {
       clang_getCString(clang_getTypeSpelling(root_type->type));
   fprintf(out_impl,
           "char* load_one(%s* value, yaml_parser_t* parser) {\n"
+          "  char* old_locale = setlocale(LC_NUMERIC, NULL);\n"
+          "  setlocale(LC_NUMERIC, \"C\");\n"
           "  yaml_event_t event;\n"
           "  yaml_parser_parse(parser, &event);\n"
           "  if (event.type == YAML_STREAM_START_EVENT) {\n"
@@ -1915,6 +1923,7 @@ int main(int const argc, char const *argv[]) {
           "  yaml_event_delete(&event);\n"
           "  yaml_parser_parse(parser, &event); // assume document end\n"
           "  yaml_event_delete(&event);\n"
+          "  setlocale(LC_NUMERIC, old_locale);\n"
           "  return ret;\n"
           "}\n", type_spelling,
           (int)root_type->constructor_name_len,

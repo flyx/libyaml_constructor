@@ -11,12 +11,16 @@ static const char* input =
     "  - name: Ada Lovelace\n"
     "    age: 36\n"
     "    gender: female\n"
+    "    height: 1.65\n"
     "  - name: Karl Koch\n"
     "    age: 27\n"
     "    gender: male\n"
+    "    height: 1.73\n"
     "  - name: Scrooge McDuck\n"
     "    age: 75\n"
-    "    gender: other\n";
+    "    gender: other\n"
+    "    height: 0.91\n"
+    "toggle: true";
 
 int main(int argc, char* argv[]) {
   yaml_parser_t parser;
@@ -33,18 +37,22 @@ int main(int argc, char* argv[]) {
   } else {
     bool success = true;
     ASSERT_EQUALS_CHAR('W', data.symbol, success);
+    ASSERT_EQUALS_BOOL(true, data.toggle, success);
 
     ASSERT_EQUALS_STRING("Ada Lovelace", data.people.data[0].name, success);
     ASSERT_EQUALS_ENUM(FEMALE, data.people.data[0].gender, success, gender_repr);
     ASSERT_EQUALS_INT(36, data.people.data[0].age, success);
+    ASSERT_EQUALS_FLOAT(1.65, data.people.data[0].height, success);
 
     ASSERT_EQUALS_STRING("Karl Koch", data.people.data[1].name, success);
     ASSERT_EQUALS_ENUM(MALE, data.people.data[1].gender, success, gender_repr);
     ASSERT_EQUALS_INT(27, data.people.data[1].age, success);
+    ASSERT_EQUALS_FLOAT(1.73, data.people.data[0].height, success);
 
     ASSERT_EQUALS_STRING("Scrooge McDuck", data.people.data[2].name, success);
     ASSERT_EQUALS_ENUM(OTHER, data.people.data[2].gender, success, gender_repr);
     ASSERT_EQUALS_INT(75, data.people.data[2].age, success);
+    ASSERT_EQUALS_FLOAT(0.91, data.people.data[0].height, success);
 
     return success ? 0 : 1;
   }

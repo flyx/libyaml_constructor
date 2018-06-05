@@ -28,6 +28,7 @@ List of stuff that currently should work:
    `unsigned char`, `unsigned short`, `unsigned`, `unsigned long`,
    `unsigned long long`)
  * `char` (interpreted as ASCII-character)
+ * `bool` (taking the literals `true` and `false`)
  * `struct` with fields containing anything from this list
  * `enum` at top-level
  * `char*` as string or optional string

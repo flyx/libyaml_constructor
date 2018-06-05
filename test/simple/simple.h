@@ -1,4 +1,5 @@
 #include <stddef.h>
+#include <stdbool.h>
 
 #ifndef _SIMPLE_H
 #define _SIMPLE_H
@@ -17,6 +18,7 @@ struct person {
   char* name;
   int age;
   enum gender_t gender;
+  float height;
 };
 
 //!list
@@ -28,6 +30,7 @@ typedef struct person_list_s {
 
 struct root {
   char symbol;
+  bool toggle;
   person_list people;
 };
 

@@ -1,10 +1,3 @@
-//
-//  yaml_deserializer.h
-//  libheroes
-//
-//  Created by Felix Krause on 02.04.18.
-//
-
 #ifndef LIBYAML_DESERIALIZER_H
 #define LIBYAML_DESERIALIZER_H
 
@@ -14,6 +7,8 @@
 #include <limits.h>
 #include <stdarg.h>
 #include <assert.h>
+#include <stdbool.h>
+#include <math.h>
 
 #define walk(table, name, min, max, result)\
   int8_t walk__pos = 0;\
@@ -139,15 +134,15 @@ static char* name(value_type *const value, yaml_parser_t *const parser,\
     free(escaped);\
     return buffer;\
   }\
-  *value = (int)res;\
+  *value = (value_type)res;\
   return NULL;\
 }
 
 DEFINE_INT_CONSTRUCTOR(construct_short, short, SHRT_MIN, SHRT_MAX)
 DEFINE_INT_CONSTRUCTOR(construct_int, int, INT_MIN, INT_MAX)
 DEFINE_INT_CONSTRUCTOR(construct_long, long, LONG_MIN, LONG_MAX)
-DEFINE_INT_CONSTRUCTOR(construct_long_long, long long, LONG_LONG_MIN,
-                       LONG_LONG_MAX)
+DEFINE_INT_CONSTRUCTOR(construct_long_long, long long, LLONG_MIN,
+                       LLONG_MAX)
 
 #define DEFINE_UNSIGNED_CONSTRUCTOR(name, value_type, max) \
 static char* name(value_type *const value, yaml_parser_t *const parser,\
@@ -175,7 +170,7 @@ static char* name(value_type *const value, yaml_parser_t *const parser,\
     free(escaped);\
     return buffer;\
   }\
-  *value = (size_t)res;\
+  *value = (value_type)res;\
   return NULL;\
 }
 
@@ -198,7 +193,7 @@ static char* construct_string(char** const value, yaml_parser_t* const parser,
   return NULL;
 }
 
-static char* construct_char(char* const value, yaml_parser_t* const parser,
+static char* construct_char(char *const value, yaml_parser_t* const parser,
                        yaml_event_t* cur) {
   (void)parser;
   if (cur->type != YAML_SCALAR_EVENT) {
@@ -216,5 +211,47 @@ static char* construct_char(char* const value, yaml_parser_t* const parser,
   return NULL;
 }
 
+static char* construct_bool(bool *const value, yaml_parser_t *const parser,
+                            yaml_event_t* cur) {
+  (void)parser;
+  if (cur->type != YAML_SCALAR_EVENT) {
+    return wrong_event_error(YAML_SCALAR_EVENT, cur);
+  } else if (strcmp("true", (const char*)cur->data.scalar.value) == 0) {
+    *value = true;
+  } else if (strcmp("false", (const char*)cur->data.scalar.value) == 0) {
+    *value = false;
+  } else {
+    size_t escaped_len;
+    char* escaped = escape((const char*)cur->data.scalar.value, &escaped_len);
+    char* buffer = render_error(cur, "expected boolean value, got %s",
+        escaped_len, escaped);
+    free(escaped);
+    return buffer;
+  }
+  return NULL;
+}
+
+#define DEFINE_FP_CONSTRUCTOR(name, value_type, overflow, func) \
+static char* name(value_type *const value, yaml_parser_t *const parser,\
+                  yaml_event_t* cur) {\
+  (void)parser;\
+  if (cur->type != YAML_SCALAR_EVENT) {\
+    return wrong_event_error(YAML_SCALAR_EVENT, cur);\
+  }\
+  char* end_ptr;\
+  *value = func((const char*)cur->data.scalar.value, &end_ptr);\
+  if (*end_ptr != '\0' || *value == (overflow)) {\
+    size_t escaped_len;\
+    char* escaped = escape((const char*)cur->data.scalar.value, &escaped_len);\
+    char* buffer = render_error(cur, "cannot parse as " #value_type \
+                                " value: %s", escaped_len, escaped);\
+    free(escaped);\
+    return buffer;\
+  }\
+}
+
+DEFINE_FP_CONSTRUCTOR(construct_float, float, HUGE_VALF, strtof)
+DEFINE_FP_CONSTRUCTOR(construct_double, double, HUGE_VAL, strtod)
+DEFINE_FP_CONSTRUCTOR(construct_long_double, long double, HUGE_VALL, strtold)
 
 #endif
