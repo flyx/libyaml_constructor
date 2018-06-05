@@ -248,6 +248,7 @@ static char* name(value_type *const value, yaml_parser_t *const parser,\
     free(escaped);\
     return buffer;\
   }\
+  return NULL;\
 }
 
 DEFINE_FP_CONSTRUCTOR(construct_float, float, HUGE_VALF, strtof)
