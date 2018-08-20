@@ -240,7 +240,8 @@ typedef enum {
   ANN_REPR = 4,
   ANN_OPTIONAL = 5,
   ANN_OPTIONAL_STRING = 6,
-  ANN_ENUM_END = 7
+  ANN_IGNORED = 7,
+  ANN_ENUM_END = 8
 } annotation_kind_t;
 
 /*
@@ -309,7 +310,8 @@ typedef struct {
 } tagged_info_t;
 
 static char const *const annotation_names[] = {
-    "", "string", "list", "tagged", "repr", "optional", "optional_string"
+    "", "string", "list", "tagged", "repr", "optional", "optional_string",
+    "ignored"
 };
 
 static bool const annotation_has_param[] = {
@@ -500,8 +502,9 @@ static bool equal_type_descriptors(type_descriptor_t const left,
 
 /*
  * Add the given type at the given cursor position to the given type_info.
- * Returns the index of the added type, or -1 if the was an error while adding
- * the type.
+ * Returns the index of the added type; -1 if the was an error while adding
+ * the type, and -2 if the type was ignored (because it was annotated
+ * with !ignore).
  */
 static int add_type(type_info_t* const type_info, CXType const type,
                     CXCursor const cursor) {
@@ -509,6 +512,7 @@ static int add_type(type_info_t* const type_info, CXType const type,
   if (!get_annotation(cursor, &annotation)) {
     return -1;
   }
+  if (annotation.kind == ANN_IGNORED) return -2;
 
   if (type_info->list->count == type_info->list->capacity) {
     type_descriptor_t *const new_data =
@@ -570,7 +574,8 @@ static enum CXChildVisitResult discover_types
         if (type_name[0] != '\0') {
           int const index = add_type(type_info, type, cursor);
           if (index == -1) TYPE_DISCOVERY_ERROR;
-          if (!add_name(&type_info->list->names, type, (size_t)index)) {
+          if (index != -2 &&
+              !add_name(&type_info->list->names, type, (size_t)index)) {
             print_error(cursor, "duplicate type name: \"%s\"\n", type_name);
             TYPE_DISCOVERY_ERROR;
           }
@@ -580,7 +585,8 @@ static enum CXChildVisitResult discover_types
         if (type_name[0] != '\0') {
           int const index = add_type(type_info, type, cursor);
           if (index == -1) TYPE_DISCOVERY_ERROR;
-          if (!add_name(&type_info->list->names, type, (size_t)index)) {
+          if (index != -2 &&
+              !add_name(&type_info->list->names, type, (size_t)index)) {
             print_error(cursor, "duplicate type name: \"%s\"\n", type_name);
             TYPE_DISCOVERY_ERROR;
           }
@@ -616,16 +622,18 @@ static enum CXChildVisitResult discover_types
               annotation_t annotation;
               if (!get_annotation(cursor, &annotation))
                 TYPE_DISCOVERY_ERROR;
-              if (!gen_type_descriptor(cursor, clang_getCanonicalType(type),
-                                       &descriptor, &annotation))
-                TYPE_DISCOVERY_ERROR;
-              if (equal_type_descriptors(
-                  type_info->list->data[underlying_index],
-                  descriptor)) {
-                target_index = underlying_index;
-                type_info->list->data[target_index].type = type;
-              } else {
-                target_index = add_type(type_info, type, cursor);
+              if (annotation.kind != ANN_IGNORED) {
+                if (!gen_type_descriptor(cursor, clang_getCanonicalType(type),
+                                         &descriptor, &annotation))
+                  TYPE_DISCOVERY_ERROR;
+                if (equal_type_descriptors(
+                    type_info->list->data[underlying_index],
+                    descriptor)) {
+                  target_index = underlying_index;
+                  type_info->list->data[target_index].type = type;
+                } else {
+                  target_index = add_type(type_info, type, cursor);
+                }
               }
             }
           } else {
@@ -635,7 +643,8 @@ static enum CXChildVisitResult discover_types
           target_index = add_type(type_info, type, cursor);
         }
         if (target_index == -1) TYPE_DISCOVERY_ERROR;
-        if (!add_name(&type_info->list->names, type, (size_t)target_index)) {
+        if (target_index != -2 &&
+            !add_name(&type_info->list->names, type, (size_t)target_index)) {
           print_error(cursor, "duplicate type name: \"%s\"\n", type_name);
           TYPE_DISCOVERY_ERROR;
         }
@@ -788,10 +797,13 @@ static enum CXChildVisitResult list_visitor
 
   annotation_t annotation;
   get_annotation(cursor, &annotation);
-  if (annotation.kind != ANN_NONE) {
-    print_error(cursor, "list fields may not carry annotations!\n");
-    if (annotation_has_param[annotation.kind]) free(annotation.param);
-    LIST_VISITOR_ERROR;
+  switch(annotation.kind) {
+    case ANN_IGNORED: return CXChildVisit_Continue;
+    case ANN_NONE: break;
+    default:
+      print_error(cursor, "list fields may not carry annotations!\n");
+      if (annotation_has_param[annotation.kind]) free(annotation.param);
+      LIST_VISITOR_ERROR;
   }
 
   if (!strcmp(name, "data")) {
@@ -987,26 +999,32 @@ static char* gen_deserialization(char const *const name,
        type_descriptor->flags.pointer != PTR_NONE);
 }
 
+enum describe_field_result_t {
+  ADDED, IGNORED, ERROR
+};
+
 /*
- * Generate a type descriptor for the given struct field. Return true iff the
+ * Generate a type descriptor for the given struct field. Return ADDED iff the
  * descripter has been successfully generated. Renders the error to stderr iff
- * it returns false.
+ * it returns ERROR. Returns IGNORED iff the field is tagged with the
+ * !ignored annotation.
  */
-static bool describe_field(CXCursor const cursor,
-                           types_list_t const *const types_list,
-                           type_descriptor_t* const ret) {
+static enum describe_field_result_t describe_field
+    (CXCursor const cursor, types_list_t const *const types_list,
+     type_descriptor_t* const ret) {
   CXType const t = clang_getCanonicalType(clang_getCursorType(cursor));
   annotation_t annotation;
   bool success = get_annotation(cursor, &annotation);
-  if (!success) return false;
+  if (!success) return ERROR;
   ptr_kind pointer_kind = PTR_OBJECT_POINTER;
   ptr_kind str_pointer_kind = PTR_STRING_VALUE;
   switch (annotation.kind) {
+    case ANN_IGNORED: return IGNORED;
     case ANN_OPTIONAL_STRING:
       if (t.kind != CXType_Pointer) {
         print_error(cursor,
                     "!optional_string must be applied on a pointer type.");
-        return false;
+        return ERROR;
       }
       str_pointer_kind = PTR_OPTIONAL_STRING_VALUE;
       // intentional fall-through
@@ -1016,7 +1034,7 @@ static bool describe_field(CXCursor const cursor,
                             "(found on a '%s')!\n",
                     annotation_names[annotation.kind],
                     clang_getCString(clang_getTypeKindSpelling(t.kind)));
-        return false;
+        return ERROR;
       }
       const CXType pointee = clang_getPointeeType(t);
       if (pointee.kind != CXType_Char_S) {
@@ -1024,7 +1042,7 @@ static bool describe_field(CXCursor const cursor,
                             "(found on a '%s')!\n",
                     annotation_names[annotation.kind],
                     clang_getCString(clang_getTypeKindSpelling(t.kind)));
-        return false;
+        return ERROR;
       } else {
         ret->flags.list = false;
         ret->flags.tagged = false;
@@ -1035,13 +1053,13 @@ static bool describe_field(CXCursor const cursor,
         ret->destructor_name_len = 0;
         ret->converter_decl = NULL;
         ret->converter_name_len = 0;
-        return true;
+        return ADDED;
       }
     }
     case ANN_OPTIONAL:
       if (t.kind != CXType_Pointer) {
         print_error(cursor, "!optional must be applied on a pointer type.");
-        return false;
+        return ERROR;
       }
       pointer_kind = PTR_OPTIONAL_VALUE;
       // intentional fall-through
@@ -1050,35 +1068,35 @@ static bool describe_field(CXCursor const cursor,
         CXType const pointee = clang_getPointeeType(t);
         if (pointee.kind == CXType_Pointer) {
           print_error(cursor, "pointer to pointer not supported.");
-          return false;
+          return ERROR;
         }
         char const *const type_name = clang_getCString(
             clang_getTypeSpelling(pointee));
         int const type_index = find(&types_list->names, type_name);
         if (type_index == -1) {
           print_error(cursor, "Unknown type: %s", type_name);
-          return false;
+          return ERROR;
         }
         *ret = types_list->data[type_index];
         ret->flags.pointer = pointer_kind;
         ret->spelling = type_name;
-        return true;
+        return ADDED;
       } else {
         char const *const type_name =
             clang_getCString(clang_getTypeSpelling(t));
         int const type_index = find(&types_list->names, type_name);
         if (type_index == -1) {
           print_error(cursor, "Unknown type: %s", type_name);
-          return false;
+          return ERROR;
         }
         *ret = types_list->data[type_index];
         ret->spelling = type_name;
-        return true;
+        return ADDED;
       }
     default:
       print_error(cursor, "Annotation '%s' not valid here.",
                   annotation_names[annotation.kind]);
-      return false;
+      return ERROR;
   }
 }
 
@@ -1135,6 +1153,12 @@ static enum CXChildVisitResult tagged_enum_visitor
     return CXChildVisit_Break;
   }
   char const *const name = clang_getCString(clang_getCursorSpelling(cursor));
+  if (name == NULL) {
+    print_error(cursor,
+                "Unexpected enum constant decl without a name!");
+    info->constants_count = SIZE_MAX;
+    return CXChildVisit_Break;
+  }
   info->enum_constants[info->constants_count++] = name;
   return CXChildVisit_Continue;
 }
@@ -1169,8 +1193,12 @@ static enum CXChildVisitResult tagged_union_visitor
 
   const char* const name = clang_getCString(clang_getCursorSpelling(cursor));
   type_descriptor_t descriptor;
-  if (!describe_field(cursor, info->types_list, &descriptor)) {
-    TAGGED_VISITOR_ERROR;
+  switch (describe_field(cursor, info->types_list, &descriptor)) {
+    case ERROR:
+      TAGGED_VISITOR_ERROR;
+    case IGNORED:
+      return CXChildVisit_Continue;
+    case ADDED: break;
   }
 
   char *const impl = gen_field_deserialization(name, &descriptor, "cur");
@@ -1223,6 +1251,8 @@ static enum CXChildVisitResult tagged_visitor
       if (info->constants_count == 0) {
         print_error(cursor,
                     "enum for tagged union must have at least one item!\n");
+        TAGGED_VISITOR_ERROR;
+      } else if (info->constants_count == SIZE_MAX) {
         TAGGED_VISITOR_ERROR;
       }
       info->field_name = clang_getCString(clang_getCursorSpelling(cursor));
@@ -1281,28 +1311,6 @@ static enum CXChildVisitResult tagged_visitor
 }
 
 /*
- * Render destructor calls for the fields of a tagged union struct's union.
- */
-static enum CXChildVisitResult tagged_destructor_visitor
-    (CXCursor const cursor, CXCursor const parent,
-     CXClientData const client_data) {
-  (void)parent;
-  (void)cursor;
-  tagged_info_t *const info = (tagged_info_t*)client_data;
-
-  size_t const index = info->cur++;
-  char *const destructor = info->destructor_calls[index];
-  if (destructor == NULL) {
-    fprintf(info->out, "    case %s: break;\n", info->enum_constants[index]);
-  } else {
-    fprintf(info->out, "    case %s:\n      %s\n      break;\n",
-            info->enum_constants[index], destructor);
-    free(destructor);
-  }
-  return CXChildVisit_Continue;
-}
-
-/*
  * Write constructor and destructor implementations for the given tagged union
  * type to the given file.
  */
@@ -1334,11 +1342,15 @@ static bool gen_tagged_impls
 
   fprintf(out, "\n%s {\n  switch(value->%s) {\n",
           type_descriptor->destructor_decl, info.field_name);
-  info.cur = 0;
-  clang_visitChildren(clang_getTypeDeclaration(info.union_type),
-                      &tagged_destructor_visitor, &info);
-  for(; info.cur < info.constants_count; ++info.cur) {
-    fprintf(out, "    case %s: break;\n", info.enum_constants[info.cur]);
+  for (size_t i = 0; i < info.constants_count; ++i) {
+    char *const destructor = info.destructor_calls[i];
+    if (destructor == NULL) {
+      fprintf(info.out, "    case %s: break;\n", info.enum_constants[i]);
+    } else {
+      fprintf(info.out, "    case %s:\n      %s\n      break;\n",
+              info.enum_constants[i], destructor);
+      free(destructor);
+    }
   }
   fputs("  }\n}\n", out);
   return true;
@@ -1406,9 +1418,13 @@ static enum CXChildVisitResult field_visitor
   }
   char const *const name = clang_getCString(clang_getCursorSpelling(cursor));
   type_descriptor_t descriptor;
-  if (!describe_field(cursor, dea->types_list, &descriptor)) {
-    dea->seen_error = true;
-    return CXChildVisit_Break;
+  switch (describe_field(cursor, dea->types_list, &descriptor)) {
+    case ERROR:
+      dea->seen_error = true;
+      return CXChildVisit_Break;
+    case IGNORED:
+      return CXChildVisit_Continue;
+    case ADDED: break;
   }
 
   struct_dfa_node_t *const cur_node = include_name(dea, name);
@@ -1535,90 +1551,103 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
   }
 
   fprintf(out, "\n%s {\n", type_descriptor->constructor_decl);
-  put_control_table(&dea, out);
+  if (dea.max >= dea.min) {
+    put_control_table(&dea, out);
+  } else {
+    free(dea.nodes[0]);
+    dea.count = 0;
+  }
   fputs("  if (cur->type != YAML_MAPPING_START_EVENT) {\n"
         "    return wrong_event_error(YAML_MAPPING_START_EVENT, cur);\n"
         "  }\n"
         "  yaml_event_t key;\n"
         "  yaml_parser_parse(parser, &key);\n"
-        "  char* ret = NULL;\n"
-        "  bool found[] = {", out);
-  bool first = true;
-  for (size_t i = 0; i < dea.count; i++) {
-    if (dea.nodes[i]->loader_implementation != NULL) {
-      if (first) first = false;
-      else fputs(", ", out);
-      fputs("false", out);
+        "  char* ret = NULL;\n", out);
+  if (dea.count > 0) {
+    fputs("  bool found[] = {", out);
+    bool first = true;
+    for (size_t i = 0; i < dea.count; i++) {
+      if (dea.nodes[i]->loader_implementation != NULL) {
+        if (first) first = false;
+        else fputs(", ", out);
+        fputs("false", out);
+      }
     }
-  }
-  fputs("};\n"
-        "  static const bool optional[] = {", out);
-  first = true;
-  for (size_t i = 0; i < dea.count; i++) {
-    if (dea.nodes[i]->loader_implementation != NULL) {
-      if (first) first = false;
-      else fputs(", ", out);
-      fputs(dea.nodes[i]->optional ? "true" : "false", out);
+    fputs("};\n"
+          "  static const bool optional[] = {", out);
+    first = true;
+    for (size_t i = 0; i < dea.count; i++) {
+      if (dea.nodes[i]->loader_implementation != NULL) {
+        if (first) first = false;
+        else fputs(", ", out);
+        fputs(dea.nodes[i]->optional ? "true" : "false", out);
+      }
     }
-  }
-  fputs("};\n", out);
-  for (size_t i = 0; i < dea.count; i++) {
-    if (dea.nodes[i]->optional) {
-      fprintf(out, "  value->%s = NULL;\n", dea.nodes[i]->loader_item_name);
+    fputs("};\n", out);
+    for (size_t i = 0; i < dea.count; i++) {
+      if (dea.nodes[i]->optional) {
+        fprintf(out, "  value->%s = NULL;\n", dea.nodes[i]->loader_item_name);
+      }
     }
-  }
-  fputs("  static char const *const names[] = {", out);
-  first = true;
-  for (size_t i = 0; i < dea.count; i++) {
-    if (dea.nodes[i]->loader_implementation != NULL) {
-      if (first) first = false;
-      else fputs(", ", out);
-      fprintf(out, "\"%s\"", dea.nodes[i]->loader_item_name);
+    fputs("  static char const *const names[] = {", out);
+    first = true;
+    for (size_t i = 0; i < dea.count; i++) {
+      if (dea.nodes[i]->loader_implementation != NULL) {
+        if (first) first = false;
+        else fputs(", ", out);
+        fprintf(out, "\"%s\"", dea.nodes[i]->loader_item_name);
+      }
     }
+    fputs("};\n"
+          "  while(key.type != YAML_MAPPING_END_EVENT) {\n"
+          "    if (key.type != YAML_SCALAR_EVENT) {\n"
+          "      ret = wrong_event_error(YAML_SCALAR_EVENT, &key);\n"
+          "      break;\n"
+          "    }\n"
+          "    int8_t result;\n"
+          "    walk(table, key.data.scalar.value, ", out);
+    fprintf(out, "%zu, %zu, result);\n", dea.min - 1, dea.max + 1);
+    fputs("    yaml_event_t event;\n"
+          "    yaml_parser_parse(parser, &event);\n"
+          "    const char* const name = (const char*)key.data.scalar.value;\n"
+          "    switch(result) {\n", out);
+    process_struct_loaders(&dea, out);
+    fputs("      default: {\n"
+          "          size_t escaped_len;\n"
+          "          char* escaped = escape(name, &escaped_len);\n"
+          "          ret = render_error(&key, \"unknown field: %s\", escaped_len,"
+          "escaped);\n"
+          "          free(escaped);\n"
+          "        }\n"
+          "        break;\n"
+          "    }\n"
+          "    yaml_event_delete(&event);\n"
+          "    if (ret != NULL) break;\n"
+          "    yaml_event_delete(&key);\n"
+          "    yaml_parser_parse(parser, &key);\n"
+          "  }\n", out);
+  } else {
+    fputs("  if (key.type != YAML_MAPPING_END_EVENT) {\n"
+          "    ret = render_error(&key, \"mapping must be empty\", 0);\n"
+          "  }\n", out);
   }
-  fputs("};\n"
-        "  while(key.type != YAML_MAPPING_END_EVENT) {\n"
-        "    if (key.type != YAML_SCALAR_EVENT) {\n"
-        "      ret = wrong_event_error(YAML_SCALAR_EVENT, &key);\n"
-        "      break;\n"
-        "    }\n"
-        "    int8_t result;\n"
-        "    walk(table, key.data.scalar.value, ", out);
-  fprintf(out, "%zu, %zu, result);\n", dea.min - 1, dea.max + 1);
-  fputs("    yaml_event_t event;\n"
-        "    yaml_parser_parse(parser, &event);\n"
-        "    const char* const name = (const char*)key.data.scalar.value;\n"
-        "    switch(result) {\n", out);
-  process_struct_loaders(&dea, out);
-  fputs("      default: {\n"
-        "          size_t escaped_len;\n"
-        "          char* escaped = escape(name, &escaped_len);\n"
-        "          ret = render_error(&key, \"unknown field: %s\", escaped_len,"
-        "escaped);\n"
-        "          free(escaped);\n"
-        "        }\n"
-        "        break;\n"
-        "    }\n"
-        "    yaml_event_delete(&event);\n"
-        "    if (ret != NULL) break;\n"
-        "    yaml_event_delete(&key);\n"
-        "    yaml_parser_parse(parser, &key);\n"
-        "  }\n"
-        "  yaml_event_delete(&key);\n"
-        "  if (!ret) {\n"
-        "    for (size_t i = 0; i < sizeof(found); i++) {\n"
-        "      if (!found[i] && !optional[i]) {\n"
-        "        const size_t name_len = strlen(names[i]);\n"
-        "        ret = render_error(cur, \"missing value for field \\\"%s\\\"\","
-        " name_len, names[i]);\n"
-        "        break;\n"
-        "      }\n"
-        "    }\n"
-        "  }\n"
-        "  if (ret) {\n", out);
-  process_struct_cleanup(&dea, out);
-  fputs("  }\n"
-        "  return ret;\n}\n", out);
+  fputs("  yaml_event_delete(&key);\n", out);
+  if (dea.count > 0) {
+    fputs("  if (!ret) {\n"
+          "    for (size_t i = 0; i < sizeof(found); i++) {\n"
+          "      if (!found[i] && !optional[i]) {\n"
+          "        const size_t name_len = strlen(names[i]);\n"
+          "        ret = render_error(cur, \"missing value for field \\\"%s\\\"\","
+          " name_len, names[i]);\n"
+          "        break;\n"
+          "      }\n"
+          "    }\n"
+          "  }\n"
+          "  if (ret) {\n", out);
+    process_struct_cleanup(&dea, out);
+    fputs("  }\n", out);
+  }
+  fputs("  return ret;\n}\n", out);
 
   fprintf(out, "\n%s {", type_descriptor->destructor_decl);
   process_struct_destructors(&dea, out);
@@ -1670,6 +1699,8 @@ static enum CXChildVisitResult enum_visitor
       break;
     case ANN_NONE:
       break;
+    case ANN_IGNORED:
+      return CXChildVisit_Continue;
     default:
       print_error(cursor, "Unsupported annotation for enum constant: '%s'",
                   annotation_names[annotation.kind]);
