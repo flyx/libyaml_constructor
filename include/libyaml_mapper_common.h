@@ -89,8 +89,8 @@ static char* render_error(yaml_event_t* event, const char* message,
                           size_t expected_param_length, ...) {
   static const char pos_template[] = "l. %zu, c. %zu: ";
   size_t expected_pos_len = sizeof(pos_template) - 7 + // placeholder + terminator
-                            digits_count(event->start_mark.line) +
-                            digits_count(event->start_mark.column);
+                            digits_count(event->start_mark.line + 1) +
+                            digits_count(event->start_mark.column + 1);
   char* buffer = malloc(expected_pos_len + expected_param_length +
                         strlen(message) + 1);
   int pos_len = sprintf(buffer, pos_template, event->start_mark.line,
@@ -106,7 +106,7 @@ static char* render_error(yaml_event_t* event, const char* message,
 static char* wrong_event_error(yaml_event_type_t expected,
                                yaml_event_t* actual) {
   return render_error(actual, "expected %s, got %s", 14 + 14,
-      event_spelling(actual->type), event_spelling(expected));
+      event_spelling(expected), event_spelling(actual->type));
 }
 
 #define DEFINE_INT_CONSTRUCTOR(name, value_type, min, max)\
