@@ -14,7 +14,7 @@ int main(int argc, char* argv[]) {
   yaml_parser_initialize(&parser);
   yaml_parser_set_input_string(&parser, (const unsigned char*)input, strlen(input));
   struct root data;
-  char* ret = load_one(&data, &parser);
+  char* ret = load_one_struct__root(&data, &parser);
   yaml_parser_delete(&parser);
 
   if (ret) {

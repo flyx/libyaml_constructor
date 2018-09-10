@@ -18,8 +18,8 @@ int main(int argc, char* argv[]) {
   yaml_parser_initialize(&parser);
   yaml_parser_set_input_string(&parser, (const unsigned char*)input, strlen(input));
   struct root data1, data2;
-  char* ret1 = load_one(&data1, &parser);
-  char* ret2 = load_one(&data2, &parser);
+  char* ret1 = load_one_struct__root(&data1, &parser);
+  char* ret2 = load_one_struct__root(&data2, &parser);
   yaml_parser_delete(&parser);
 
   if (ret1) {

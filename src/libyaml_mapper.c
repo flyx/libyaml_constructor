@@ -1934,8 +1934,17 @@ int main(int const argc, char const *argv[]) {
 
   char const *const type_spelling =
       clang_getCString(clang_getTypeSpelling(root_type->type));
+  const char *const space = strchr(type_spelling, ' ');
+  if (space == NULL) {
+    fprintf(out_impl, "char* load_one_%s(%s* value, yaml_parser_t* parser) {\n",
+            type_spelling, type_spelling);
+  } else {
+    fprintf(out_impl,
+            "char* load_one_%.*s__%s(%s* value, yaml_parser_t* parser) {\n",
+            (int)(space - type_spelling), type_spelling, space + 1,
+            type_spelling);
+  }
   fprintf(out_impl,
-          "char* load_one(%s* value, yaml_parser_t* parser) {\n"
           "  char* old_locale = setlocale(LC_NUMERIC, NULL);\n"
           "  setlocale(LC_NUMERIC, \"C\");\n"
           "  yaml_event_t event;\n"
@@ -1956,15 +1965,23 @@ int main(int const argc, char const *argv[]) {
           "  yaml_event_delete(&event);\n"
           "  setlocale(LC_NUMERIC, old_locale);\n"
           "  return ret;\n"
-          "}\n", type_spelling,
-          (int)root_type->constructor_name_len,
+          "}\n", (int)root_type->constructor_name_len,
           root_type->constructor_decl + sizeof(CONSTRUCTOR_PREFIX));
   char* const destructor_call =
       render_destructor_call(root_type, "value", true);
-  fprintf(out_impl,
-          "void free_one(%s* value) {\n"
-          "  %s\n"
-          "}\n", type_spelling, destructor_call == NULL ? "" : destructor_call);
+  if (space == NULL) {
+    fprintf(out_impl,
+            "void free_one_%s(%s* value) {\n"
+            "  %s\n"
+            "}\n", type_spelling, type_spelling,
+            destructor_call == NULL ? "" : destructor_call);
+  } else {
+    fprintf(out_impl,
+            "void free_one_%.*s__%s(%s* value) {\n"
+            "  %s\n"
+            "}\n", (int)(space - type_spelling), type_spelling, space + 1,
+            type_spelling, destructor_call == NULL ? "" : destructor_call);
+  }
   if (destructor_call != NULL) free(destructor_call);
   fclose(out_impl);
 
@@ -1976,10 +1993,19 @@ int main(int const argc, char const *argv[]) {
   }
   fprintf(header_out,
           "#include <yaml.h>\n"
-          "#include <%s>\n"
-          "char* load_one(%s* value, yaml_parser_t* parser);\n"
-          "void free_one(%s* value);\n",
-          config.input_file_name, type_spelling, type_spelling);
+          "#include <%s>\n", config.input_file_name);
+  if (space == NULL) {
+    fprintf(header_out, "char* load_one_%s(%s* value, yaml_parser_t* parser);\n"
+                        "void free_one_%s(%s* value);\n",
+            type_spelling, type_spelling, type_spelling, type_spelling);
+  } else {
+    fprintf(header_out,
+            "char* load_one_%.*s__%s(%s* value, yaml_parser_t* parser);\n"
+            "void free_one_%.*s__%s(%s* value);\n",
+            (int)(space - type_spelling), type_spelling, space + 1,
+            type_spelling, (int)(space - type_spelling), type_spelling,
+            space + 1, type_spelling);
+  }
   fclose(header_out);
 
   clang_disposeTranslationUnit(unit);
