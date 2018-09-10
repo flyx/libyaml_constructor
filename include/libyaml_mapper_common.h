@@ -73,8 +73,7 @@ static const char* event_spelling(yaml_event_type_t type) {
 
 #define PO10_LIMIT (SIZE_MAX/10)
 
-
-size_t digits_count(size_t i) {
+static size_t digits_count(size_t i) {
   size_t n = 1;
   size_t po10 = 10;
   while(i >= po10) {
@@ -85,7 +84,7 @@ size_t digits_count(size_t i) {
   return n;
 }
 
-static char* render_error(yaml_event_t* event, const char* message,
+static char* render_error(yaml_event_t *event, const char *message,
                           size_t expected_param_length, ...) {
   static const char pos_template[] = "l. %zu, c. %zu: ";
   size_t expected_pos_len = sizeof(pos_template) - 7 + // placeholder + terminator
@@ -111,7 +110,7 @@ static char* wrong_event_error(yaml_event_type_t expected,
 
 #define DEFINE_INT_CONSTRUCTOR(name, value_type, min, max)\
 static char* name(value_type *const value, yaml_parser_t *const parser,\
-                  yaml_event_t* cur) {\
+                  yaml_event_t *cur) {\
   (void)parser;\
   if (cur->type != YAML_SCALAR_EVENT) {\
     return wrong_event_error(YAML_SCALAR_EVENT, cur);\
@@ -181,7 +180,7 @@ DEFINE_UNSIGNED_CONSTRUCTOR(construct_unsigned_long, unsigned long, ULLONG_MAX)
 DEFINE_UNSIGNED_CONSTRUCTOR(construct_unsigned_long_long, unsigned long long,
                             ULLONG_MAX)
 
-static char* construct_string(char** const value, yaml_parser_t* const parser,
+static char* construct_string(char** const value, yaml_parser_t *const parser,
                          yaml_event_t* cur) {
   (void)parser;
   if (cur->type != YAML_SCALAR_EVENT) {
@@ -193,7 +192,7 @@ static char* construct_string(char** const value, yaml_parser_t* const parser,
   return NULL;
 }
 
-static char* construct_char(char *const value, yaml_parser_t* const parser,
+static char* construct_char(char *const value, yaml_parser_t *const parser,
                        yaml_event_t* cur) {
   (void)parser;
   if (cur->type != YAML_SCALAR_EVENT) {

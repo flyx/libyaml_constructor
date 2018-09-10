@@ -119,17 +119,17 @@ typedef struct {
    * May be NULL if the type does not have a constructor (only valid for
    * atomic types).
    */
-  char* constructor_decl;
+  char *constructor_decl;
   /*
    * Declaration of the converter function that constructs a value of the type
    * from a string. NULL iff the type is not an atomic type.
    */
-  char* converter_decl;
+  char *converter_decl;
   /*
    * Declaration of the destructor function for the type. NULL iff the type is
    * an atomic type.
    */
-  char* destructor_decl;
+  char *destructor_decl;
   /*
    * Lengths of the above function declarations.
    */
@@ -137,7 +137,7 @@ typedef struct {
   /*
    * Spelling of the type.
    */
-  const char* spelling;
+  const char *spelling;
 } type_descriptor_t;
 
 /*
@@ -182,17 +182,17 @@ typedef struct {
    * iff this node is a final node, this contains the code to load the value of
    * the current field. NULL otherwise.
    */
-  char* loader_implementation;
+  char *loader_implementation;
   /*
    * iff this node is a final node, this may contain the code to destruct the
    * value of the current field. Not every field must necessarily have code
    * for destruction. NULL otherwise.
    */
-  char* destructor_implementation;
+  char *destructor_implementation;
   /*
    * contains the name of the field iff this is a final node.
    */
-  const char* loader_item_name;
+  const char *loader_item_name;
   /*
    * true iff this is a final node and the value is declared as optional.
    */
@@ -206,7 +206,7 @@ typedef struct {
   /*
    * nodes of the DFA
    */
-  struct_dfa_node_t* nodes[MAX_NODES];
+  struct_dfa_node_t *nodes[MAX_NODES];
   /*
    * Number of nodes.
    */
@@ -224,7 +224,7 @@ typedef struct {
   /*
    * Known types.
    */
-  const types_list_t* types_list;
+  const types_list_t *types_list;
 } struct_dfa_t;
 
 // ----------- Annotations --------------
@@ -253,7 +253,7 @@ typedef struct {
    * Parameter of the annotation, if the annotation supports a parameter.
    * Else NULL.
    */
-  char* param;
+  char *param;
 } annotation_t;
 
 // ---- States for discovering types ----
@@ -265,7 +265,7 @@ typedef struct {
   /*
    * List of discovered types.
    */
-  types_list_t* list;
+  types_list_t *list;
   /*
    * The last discovered type. Used to discover that a following typedef
    * contains the recent type's definition. In that case, a possible annotation
@@ -297,15 +297,15 @@ typedef enum {
  * State for discovering information on a tagged union struct
  */
 typedef struct {
-  const char* enum_constants[256];
-  char* destructor_calls[256];
+  const char *enum_constants[256];
+  char *destructor_calls[256];
   size_t constants_count, cur;
   bool seen_error;
-  const char* field_name;
+  const char *field_name;
   CXType union_type;
   tagged_state_t state;
-  FILE* out;
-  types_list_t const* types_list;
+  FILE *out;
+  types_list_t const *types_list;
   int enum_type_id;
 } tagged_info_t;
 
@@ -506,7 +506,7 @@ static bool equal_type_descriptors(type_descriptor_t const left,
  * the type, and -2 if the type was ignored (because it was annotated
  * with !ignore).
  */
-static int add_type(type_info_t* const type_info, CXType const type,
+static int add_type(type_info_t *const type_info, CXType const type,
                     CXCursor const cursor) {
   annotation_t annotation;
   if (!get_annotation(cursor, &annotation)) {
@@ -674,15 +674,15 @@ static enum CXChildVisitResult discover_types
  */
 static void write_decls(types_list_t const *const list, FILE *const out) {
   static const char constructor_template[] =
-      CONSTRUCTOR_PREFIX " construct_%s(%s* const value, "
-      "yaml_parser_t* const parser, yaml_event_t* cur)";
+      CONSTRUCTOR_PREFIX " construct_%s(%s *const value, "
+      "yaml_parser_t *const parser, yaml_event_t *cur)";
   static const char elaborated_constructor_template[] =
-      CONSTRUCTOR_PREFIX " construct_%.*s__%s(%s* const value, "
-      "yaml_parser_t* const parser, yaml_event_t* cur)";
+      CONSTRUCTOR_PREFIX " construct_%.*s__%s(%s *const value, "
+      "yaml_parser_t *const parser, yaml_event_t *cur)";
   static const char destructor_template[] =
-      DESTRUCTOR_PREFIX " delete_%s(%s* const value)";
+      DESTRUCTOR_PREFIX " delete_%s(%s *const value)";
   static const char elaborated_destructor_template[] =
-      DESTRUCTOR_PREFIX " delete_%.*s__%s(%s* const value)";
+      DESTRUCTOR_PREFIX " delete_%.*s__%s(%s *const value)";
   for (size_t i = 0; i < list->count; ++i) {
     if (list->data[i].type.kind == CXType_Unexposed) {
       // predefined type; do not generate anything
@@ -741,11 +741,11 @@ static void write_decls(types_list_t const *const list, FILE *const out) {
 
     if (list->data[i].type.kind == CXType_Enum) {
       static const char converter_template[] =
-          CONVERTER_PREFIX " convert_to_%s(const char* const value, "
-          "%s* const result)";
+          CONVERTER_PREFIX " convert_to_%s(const char *const value, "
+          "%s *const result)";
       static const char elaborated_converter_template[] =
-          CONVERTER_PREFIX " convert_to_%.*s__%s(const char* const value, "
-          "%s* const result)";
+          CONVERTER_PREFIX " convert_to_%.*s__%s(const char *const value, "
+          "%s *const result)";
       if (space == NULL) {
         list->data[i].converter_name_len = strlen(type_name) +
             sizeof("convert_to_") + 1;
@@ -850,7 +850,7 @@ static enum CXChildVisitResult list_visitor
  *
  * The caller shall deallocate the returned string.
  */
-static char* render_destructor_call
+static char *render_destructor_call
     (type_descriptor_t const *const type_descriptor,
      char const *const subject, bool const is_ref) {
   size_t chars_needed = 1; // terminator
@@ -923,9 +923,9 @@ bool gen_list_impls(type_descriptor_t const *const type_descriptor,
           "  yaml_event_t event;\n"
           "  yaml_parser_parse(parser, &event);\n"
           "  while (event.type != YAML_SEQUENCE_END_EVENT) {\n"
-          "    %s* item;\n"
+          "    %s *item;\n"
           "    APPEND(value, item);\n"
-          "    char* ret = %.*s(item, parser, &event);\n"
+          "    char *ret = %.*s(item, parser, &event);\n"
           "    yaml_event_delete(&event);\n"
           "    if (ret) {\n"
           "      value->count--;\n",
@@ -968,7 +968,7 @@ bool gen_list_impls(type_descriptor_t const *const type_descriptor,
  *
  * The return value shall be deallocated by the caller.
  */
-static char* new_deserialization
+static char *new_deserialization
     (const char *const field, char const *const constructor,
      size_t const constructor_len, char const *const event_ref,
      bool const is_pointer) {
@@ -990,7 +990,7 @@ static char* new_deserialization
  *
  * The return value shall be deallocated by the caller.
  */
-static char* gen_deserialization(char const *const name,
+static char *gen_deserialization(char const *const name,
                                  type_descriptor_t const *const type_descriptor,
                                  char const *const event_ref) {
   return new_deserialization
@@ -1011,7 +1011,7 @@ enum describe_field_result_t {
  */
 static enum describe_field_result_t describe_field
     (CXCursor const cursor, types_list_t const *const types_list,
-     type_descriptor_t* const ret) {
+     type_descriptor_t *const ret) {
   CXType const t = clang_getCanonicalType(clang_getCursorType(cursor));
   annotation_t annotation;
   bool success = get_annotation(cursor, &annotation);
@@ -1105,7 +1105,7 @@ static enum describe_field_result_t describe_field
  * (if the field is a pointer) and a call to the constructor of the underlying
  * type.
  */
-static char* gen_field_deserialization
+static char *gen_field_deserialization
     (char const *const name, type_descriptor_t const *const descriptor,
      char const *const event_ref) {
   switch (descriptor->flags.pointer) {
@@ -1191,7 +1191,7 @@ static enum CXChildVisitResult tagged_union_visitor
     TAGGED_VISITOR_ERROR;
   }
 
-  const char* const name = clang_getCString(clang_getCursorSpelling(cursor));
+  const char *const name = clang_getCString(clang_getCursorSpelling(cursor));
   type_descriptor_t descriptor;
   switch (describe_field(cursor, info->types_list, &descriptor)) {
     case ERROR:
@@ -1264,7 +1264,7 @@ static enum CXChildVisitResult tagged_visitor
                     clang_getCString(clang_getTypeSpelling(t)));
         TAGGED_VISITOR_ERROR;
       }
-      fputs("  yaml_char_t* tag;\n"
+      fputs("  yaml_char_t *tag;\n"
             "  switch(cur->type) {\n"
             "    case YAML_SCALAR_EVENT:\n"
             "      tag = cur->data.scalar.tag;\n"
@@ -1284,7 +1284,7 @@ static enum CXChildVisitResult tagged_visitor
             " specific local tag, got \\\"%s\\\"\", strlen((const char*)tag),"
             " (const char*)tag);\n"
             "  }\n", info->out);
-      type_descriptor_t* enum_descriptor =
+      type_descriptor_t *enum_descriptor =
           &info->types_list->data[info->enum_type_id];
       fprintf(info->out,
               "  bool res = %.*s((const char*)(tag + 1), &value->%s);\n",
@@ -1295,7 +1295,7 @@ static enum CXChildVisitResult tagged_visitor
             "    return render_error(cur, \"not a valid tag: \\\"%s\\\"\","
             " strlen((const char*)tag), (const char*)tag);\n"
             "  }\n"
-            "  char* ret = NULL;\n", info->out);
+            "  char *ret = NULL;\n", info->out);
       fprintf(info->out, "  switch(value->%s) {\n", info->field_name);
       info->state = TAGGED_UNION;
       info->cur = 0;
@@ -1359,8 +1359,8 @@ static bool gen_tagged_impls
 /*
  * Create a new node for a struct's field name DFA
  */
-static inline struct_dfa_node_t* new_node(char const *const name) {
-  struct_dfa_node_t* const val = malloc(sizeof(struct_dfa_node_t));
+static inline struct_dfa_node_t *new_node(char const *const name) {
+  struct_dfa_node_t *const val = malloc(sizeof(struct_dfa_node_t));
   memset(val->followers, -1, sizeof(val->followers));
   val->loader_implementation = NULL;
   val->destructor_implementation = NULL;
@@ -1374,10 +1374,10 @@ static inline struct_dfa_node_t* new_node(char const *const name) {
  * Add a field name to the given DFA and return a pointer to the newly created
  * final node. Return NULL iff the DFA has no more available node slots.
  */
-static struct_dfa_node_t* include_name(struct_dfa_t* const dfa,
+static struct_dfa_node_t *include_name(struct_dfa_t *const dfa,
                                        char const *const name) {
-  struct_dfa_node_t* cur_node = dfa->nodes[0];
-  for (unsigned char const* cur_char = (unsigned char*)name; *cur_char != '\0';
+  struct_dfa_node_t *cur_node = dfa->nodes[0];
+  for (unsigned char const *cur_char = (unsigned char*)name; *cur_char != '\0';
        ++cur_char) {
     size_t const index = (size_t)(*cur_char);
     int node_id = cur_node->followers[index];
@@ -1481,7 +1481,7 @@ static void process_struct_loaders(struct_dfa_t const *const dea,
               "      case %zu:\n"
               "        if (found[%zu]) {\n"
               "          size_t escaped_len;\n"
-              "          char* escaped = escape(name, &escaped_len);\n"
+              "          char *escaped = escape(name, &escaped_len);\n"
               "          ret = render_error(&key, \"duplicate key: %%s\", "
               "escaped_len, escaped);\n"
               "          free(escaped);\n"
@@ -1562,7 +1562,7 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
         "  }\n"
         "  yaml_event_t key;\n"
         "  yaml_parser_parse(parser, &key);\n"
-        "  char* ret = NULL;\n", out);
+        "  char *ret = NULL;\n", out);
   if (dea.count > 0) {
     fputs("  bool found[] = {", out);
     bool first = true;
@@ -1609,12 +1609,12 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
     fprintf(out, "%zu, %zu, result);\n", dea.min - 1, dea.max + 1);
     fputs("    yaml_event_t event;\n"
           "    yaml_parser_parse(parser, &event);\n"
-          "    const char* const name = (const char*)key.data.scalar.value;\n"
+          "    const char *const name = (const char*)key.data.scalar.value;\n"
           "    switch(result) {\n", out);
     process_struct_loaders(&dea, out);
     fputs("      default: {\n"
           "          size_t escaped_len;\n"
-          "          char* escaped = escape(name, &escaped_len);\n"
+          "          char *escaped = escape(name, &escaped_len);\n"
           "          ret = render_error(&key, \"unknown field: %s\", escaped_len,"
           "escaped);\n"
           "          free(escaped);\n"
@@ -1779,7 +1779,7 @@ bool gen_enum_impls
         "  if (cur->type != YAML_SCALAR_EVENT) {\n"
         "    return wrong_event_error(YAML_SCALAR_EVENT, cur);\n"
         "  }\n"
-        "  char* ret;\n", out);
+        "  char *ret;\n", out);
   fprintf(out,
         "  if (%.*s((const char*)cur->data.scalar.value, value)) {\n",
           (int)type_descriptor->converter_name_len,
@@ -1787,7 +1787,7 @@ bool gen_enum_impls
   fputs("    ret = NULL;\n"
         "  } else {\n"
         "    size_t escaped_len;\n"
-        "    char* escaped = escape((const char*)cur->data.scalar.value, "
+        "    char *escaped = escape((const char*)cur->data.scalar.value, "
         "&escaped_len);\n"
         "    ret = render_error(cur, \"unknown enum value: %s\", escaped_len,"
         " escaped);\n"
@@ -1846,7 +1846,7 @@ static void mark_as_predefined(type_descriptor_t *const descriptor) {
 #define KNOWN_TYPE(name, constructor) {\
   (void)&(constructor); /* ensure constructor exists */\
   type_descriptor_t desc = {\
-    .constructor_decl = "static char* " #constructor,\
+    .constructor_decl = "static char *" #constructor,\
     .constructor_name_len = sizeof(#constructor),\
     .destructor_decl = NULL, .destructor_name_len = 0};\
   mark_as_predefined(&desc);\
@@ -1936,16 +1936,16 @@ int main(int const argc, char const *argv[]) {
       clang_getCString(clang_getTypeSpelling(root_type->type));
   const char *const space = strchr(type_spelling, ' ');
   if (space == NULL) {
-    fprintf(out_impl, "char* load_one_%s(%s* value, yaml_parser_t* parser) {\n",
+    fprintf(out_impl, "char *load_one_%s(%s *value, yaml_parser_t *parser) {\n",
             type_spelling, type_spelling);
   } else {
     fprintf(out_impl,
-            "char* load_one_%.*s__%s(%s* value, yaml_parser_t* parser) {\n",
+            "char *load_one_%.*s__%s(%s *value, yaml_parser_t *parser) {\n",
             (int)(space - type_spelling), type_spelling, space + 1,
             type_spelling);
   }
   fprintf(out_impl,
-          "  char* old_locale = setlocale(LC_NUMERIC, NULL);\n"
+          "  char *old_locale = setlocale(LC_NUMERIC, NULL);\n"
           "  setlocale(LC_NUMERIC, \"C\");\n"
           "  yaml_event_t event;\n"
           "  yaml_parser_parse(parser, &event);\n"
@@ -1959,7 +1959,7 @@ int main(int const argc, char const *argv[]) {
           "  }\n"
           "  yaml_event_delete(&event);\n"
           "  yaml_parser_parse(parser, &event);\n"
-          "  char* ret = %.*s(value, parser, &event);\n"
+          "  char *ret = %.*s(value, parser, &event);\n"
           "  yaml_event_delete(&event);\n"
           "  yaml_parser_parse(parser, &event); // assume document end\n"
           "  yaml_event_delete(&event);\n"
@@ -1967,17 +1967,17 @@ int main(int const argc, char const *argv[]) {
           "  return ret;\n"
           "}\n", (int)root_type->constructor_name_len,
           root_type->constructor_decl + sizeof(CONSTRUCTOR_PREFIX));
-  char* const destructor_call =
+  char *const destructor_call =
       render_destructor_call(root_type, "value", true);
   if (space == NULL) {
     fprintf(out_impl,
-            "void free_one_%s(%s* value) {\n"
+            "void free_one_%s(%s *value) {\n"
             "  %s\n"
             "}\n", type_spelling, type_spelling,
             destructor_call == NULL ? "" : destructor_call);
   } else {
     fprintf(out_impl,
-            "void free_one_%.*s__%s(%s* value) {\n"
+            "void free_one_%.*s__%s(%s *value) {\n"
             "  %s\n"
             "}\n", (int)(space - type_spelling), type_spelling, space + 1,
             type_spelling, destructor_call == NULL ? "" : destructor_call);
@@ -1995,13 +1995,13 @@ int main(int const argc, char const *argv[]) {
           "#include <yaml.h>\n"
           "#include <%s>\n", config.input_file_name);
   if (space == NULL) {
-    fprintf(header_out, "char* load_one_%s(%s* value, yaml_parser_t* parser);\n"
-                        "void free_one_%s(%s* value);\n",
+    fprintf(header_out, "char *load_one_%s(%s *value, yaml_parser_t *parser);\n"
+                        "void free_one_%s(%s *value);\n",
             type_spelling, type_spelling, type_spelling, type_spelling);
   } else {
     fprintf(header_out,
-            "char* load_one_%.*s__%s(%s* value, yaml_parser_t* parser);\n"
-            "void free_one_%.*s__%s(%s* value);\n",
+            "char *load_one_%.*s__%s(%s *value, yaml_parser_t *parser);\n"
+            "void free_one_%.*s__%s(%s *value);\n",
             (int)(space - type_spelling), type_spelling, space + 1,
             type_spelling, (int)(space - type_spelling), type_spelling,
             space + 1, type_spelling);
