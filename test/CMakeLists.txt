@@ -1,5 +1,3 @@
-find_package(LibYaml REQUIRED)
-
 enable_testing()
 
 function(test_case directory name)

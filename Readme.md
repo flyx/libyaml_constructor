@@ -86,6 +86,55 @@ The following annotations exist:
  * `optional_string`: for `char*` fields, works like `optional` but if given,
    parses into a null-terminated string.
 
+## Building
+
+To build libyaml_mapper, you need:
+
+ * A **C** compiler. `libyaml_mapper` is tested and known to work with GCC,
+   LLVM/Clang and Visual Studio.
+ * [CMake][3], Version 3.10 or later
+ * [libclang][1]
+ * [libyaml][4]
+
+libyaml_mapper does not actually link against libyaml (the generated code
+does), but it does require the header `yaml.h` for some sanity checks. The
+tests do link against libyaml.
+
+### Instructions for Windows
+
+Download the latest [Visual Studio IDE][6] (Community Edition unless you are in
+possession of a license) and install it. Download the latest
+[pre-built LLVM binaries][5] for Windows and execute the installer. Download
+the latest [CMake][3] installer and execute it.
+
+Since you are already in possession of all tools required to compile libyaml,
+I suggest you build it yourself: Get the latest [LibYaml release][7] and unpack
+it somewhere. Ignore the build instructions on the page; we will use CMake to
+build it instead. Start the CMake GUI, configure the source code to be the
+directory you unpacked the files into, and the binary folder to something like
+`cmake-vs` inside the source folder. Click *Configure*, *Generate* and then
+*Open Project*. Visual Studio should launch. Select the *Release*
+configuration, right-Click on the *yaml* project and select *Build*. This
+should give you a *yaml.dll* in `cmake-vs/Release`.
+
+Now, to compile libyaml_mapper, go back to the CMake GUI and select the
+libyaml_mapper folder as source folder and a subfolder `cmake-vs` as subfolder.
+We will need to add some entries to the configuration so that CMake finds all
+dependencies:
+
+ * Add a `PATH` variable named `LibClang_ROOT` and make it point to your LLVM
+   installation's root folder (e.g. `C:\LLVM`).
+ * Add a `PATH` variable named `LibYaml_ROOT` and make it point to the folder
+   you unpacked the libyaml sources to.
+ * Add a `PATH` variable named `LibYaml_LIBDIR` and make it point to the folder
+   that holds the `yaml.dll` (e.g. `${LibYaml_ROOT}/cmake-vs/Release`).
+
+After that, you should be able to *Configure* and *Generate* a Visual Studio
+project. Open it, select the *Release* configuration and build the
+*libyaml_mapper* project. It generates the executable and places required
+dependencies (`libclang.dll`) in the output folder (`cmake-vs/Release`). You
+can now use it to generate code.
+
 ## Example
 
 Let's assume we have some header file `simple.h` like this:
@@ -210,10 +259,20 @@ Executing it yields:
 
 For an example, see [test/CMakeLists.txt](test/CMakeLists.txt).
 
+I suggest using git submodules or [git-subrepo][8] to use libyaml_mapper in
+your project. That will allow you to reuse this project's CMake module to
+find libyaml.
+
 ## License
 
-[MIT](copying.txt).
+[MIT](copying.txt)
 
 
  [1]: https://clang.llvm.org/doxygen/group__CINDEX.html
  [2]: https://en.wikipedia.org/wiki/Tagged_union
+ [3]: https://cmake.org/
+ [4]: https://pyyaml.org/wiki/LibYAML
+ [5]: https://releases.llvm.org/download.html
+ [6]: https://visualstudio.microsoft.com/
+ [7]: https://pyyaml.org/wiki/LibYAML
+ [8]: https://github.com/ingydotnet/git-subrepo
