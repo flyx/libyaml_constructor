@@ -1,16 +1,13 @@
-# libyaml_mapper
+# libyaml_constructor
 
-**libyaml_mapper** is a tool that takes a C header with struct
-definitions and autogenerates C code that loads YAML into the given
-struct hierarchy. It uses the excellent [libclang][1] for parsing the
-given header.
+**libyaml_constructor** is a tool and library that loads a YAML document into
+native C types. It consists of the *generator* tool that takes a C header and
+generates the code for loading, and the *runtime* library that provides common
+functionality used by the generated code.
 
-It consists of two parts:
-
- * The **libyaml_mapper** executable generates the code.
- * The `libyaml_mapper_common.h` header is included by the generated code.
-   You need to provide access to it via `-I` when compiling the
-   generated code.
+The *constructor* depends on the excellent [libclang][1] for parsing the
+given header. The generated code and the *runtime* (quite obviously) depend on
+[libyaml][4].
 
 ## Status
 
@@ -22,7 +19,7 @@ Since this project is in development, do not expect it to work smoothly
 and be wary about its generated code, especially concerning memory leaks
 when the YAML fails to load.
 
-List of stuff that currently should work:
+List of stuff that currently works:
 
  * integer and unsigned types (`short`, `int`, `long`, `long long`,
    `unsigned char`, `unsigned short`, `unsigned`, `unsigned long`,
@@ -46,7 +43,7 @@ List of stuff that currently does not work:
 
 ## Usage
 
-    libyaml_mapper [options] file
+    yaml_constructor_generator [options] file
       options:
         -o directory       writes output files to $directory (default: .)
         -r name            expects the root type to be named $name.
@@ -55,7 +52,7 @@ List of stuff that currently does not work:
                            default: ${file without ext}_loading.{h,c}.
 
 In your code, you need to *annotate* certain structures so that
-libyaml_mapper knows your intention. You annotate a type or field by
+libyaml_constructor knows your intention. You annotate a type or field by
 adding a comment in front of it which has `!` as first character in the
 comment content (i.e. it starts with either `//!` or `/*!`). The string
 following the `!` is the annotation until the next space. Content after
@@ -63,10 +60,10 @@ that space until the following space is an optional parameter.
 
 The following annotations exist:
 
- * `string`: for `char*` fields. Tells libyaml_mapper to generate a
+ * `string`: for `char*` fields. Tells the generator to generate a
    (heap-allocated) null-terminated string into this field.
  * `list`: for structs containing a `data` pointer as well as two
-   unsigned values `count` and `capacity`. libyaml_mapper will treat the
+   unsigned values `count` and `capacity`. The generator will treat the
    annotated struct as dynamically growing list of items.
  * `tagged`: for structs containing exactly two items; the first one
    being an `enum` value and the second one being a `union`. This will
@@ -81,24 +78,21 @@ The following annotations exist:
    Enum value will be loaded from the representation given as parameter.
    This means that the spelling of the enum value in the code will *not*
    be accepted.
- * `optional`: for fields of pointer types. Tells libyaml_mapper that this field
+ * `optional`: for fields of pointer types. Tells the generator that this field
    may be omitted in the YAML, in which case it will be `NULL` after loading.
  * `optional_string`: for `char*` fields, works like `optional` but if given,
    parses into a null-terminated string.
 
 ## Building
 
-To build libyaml_mapper, you need:
+To build `libyaml_constructor_generator`, you need:
 
- * A **C** compiler. `libyaml_mapper` is tested and known to work with GCC,
-   LLVM/Clang and Visual Studio.
+ * A **C** compiler. **libyaml_constructor** is tested and known to work with
+   GCC, LLVM/Clang and Visual Studio.
  * [CMake][3], Version 3.10 or later
  * [libclang][1]
- * [libyaml][4]
 
-libyaml_mapper does not actually link against libyaml (the generated code
-does), but it does require the header `yaml.h` for some sanity checks. The
-tests do link against libyaml.
+The tests, as any generated code, also depend on [libyaml][4].
 
 ### Instructions for Windows
 
@@ -117,10 +111,10 @@ directory you unpacked the files into, and the binary folder to something like
 configuration, right-Click on the *yaml* project and select *Build*. This
 should give you a *yaml.dll* in `cmake-vs/Release`.
 
-Now, to compile libyaml_mapper, go back to the CMake GUI and select the
-libyaml_mapper folder as source folder and a subfolder `cmake-vs` as subfolder.
-We will need to add some entries to the configuration so that CMake finds all
-dependencies:
+Now, to compile `yaml_constructor_generator`, go back to the CMake GUI and
+select the `libyaml_constructor` folder as source folder and a subfolder
+`cmake-vs` as subfolder. We will need to add some entries to the configuration
+so that CMake finds all dependencies:
 
  * Add a `PATH` variable named `LibClang_ROOT` and make it point to your LLVM
    installation's root folder (e.g. `C:\LLVM`).
@@ -131,9 +125,9 @@ dependencies:
 
 After that, you should be able to *Configure* and *Generate* a Visual Studio
 project. Open it, select the *Release* configuration and build the
-*libyaml_mapper* project. It generates the executable and places required
-dependencies (`libclang.dll`) in the output folder (`cmake-vs/Release`). You
-can now use it to generate code.
+*yaml_constructor_generator* project. It generates the executable and places
+required dependencies (`libclang.dll`) in the output folder
+(`cmake-vs/Release`). You can now use it to generate code.
 
 ## Example
 
@@ -196,7 +190,7 @@ struct root {
 
 To autogenerate loading code, we execute this command:
 
-    libyaml_mapper simple.h
+    yaml_constructor_generator simple.h
 
 We do not need to give any options since our root type is named `root`
 (the default) and we want the generated files to be in the current
@@ -257,9 +251,11 @@ Executing it yields:
 
 ## Autogenerating Code with CMake
 
-For an example, see [test/CMakeLists.txt](test/CMakeLists.txt).
+For an example, see [test/CMakeLists.txt](test/CMakeLists.txt). Link the target
+that uses the generated code to the `yaml_constructor` target, which is the
+runtime.
 
-I suggest using git submodules or [git-subrepo][8] to use libyaml_mapper in
+I suggest using git submodules or [git-subrepo][8] to use libyaml_constructor in
 your project. That will allow you to reuse this project's CMake module to
 find libyaml.
 

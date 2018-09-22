@@ -7,8 +7,6 @@
 #include <string.h>
 #include <clang-c/Index.h>
 
-#include "../include/libyaml_mapper_common.h"
-
 #include "cmdline_config.h"
 
 #define MAX_NODES 2048
@@ -915,7 +913,7 @@ bool gen_list_impls(type_descriptor_t const *const type_descriptor,
 
   fprintf(out,
           "  if (cur->type != YAML_SEQUENCE_START_EVENT) {\n"
-          "    return wrong_event_error(YAML_SEQUENCE_START_EVENT, cur);\n"
+          "    return yaml_constructor_wrong_event_error(YAML_SEQUENCE_START_EVENT, cur);\n"
           "  }\n"
           "  value->data = malloc(16 * sizeof(%s));\n"
           "  value->count = 0;\n"
@@ -924,7 +922,7 @@ bool gen_list_impls(type_descriptor_t const *const type_descriptor,
           "  yaml_parser_parse(parser, &event);\n"
           "  while (event.type != YAML_SEQUENCE_END_EVENT) {\n"
           "    %s *item;\n"
-          "    APPEND(value, item);\n"
+          "    YAML_CONSTRUCTOR_APPEND(value, item);\n"
           "    char *ret = %.*s(item, parser, &event);\n"
           "    yaml_event_delete(&event);\n"
           "    if (ret) {\n"
@@ -1111,8 +1109,8 @@ static char *gen_field_deserialization
   switch (descriptor->flags.pointer) {
     case PTR_STRING_VALUE:
     case PTR_OPTIONAL_STRING_VALUE:
-        return new_deserialization(name, "construct_string",
-                                   sizeof("construct_string") - 1,
+        return new_deserialization(name, "yaml_construct_string",
+                                   sizeof("yaml_construct_string") - 1,
                                    event_ref, false);
     case PTR_OBJECT_POINTER:
     case PTR_OPTIONAL_VALUE: {
@@ -1276,11 +1274,11 @@ static enum CXChildVisitResult tagged_visitor
             "      tag = cur->data.sequence_start.tag;\n"
             "      break;\n"
             "    default:\n"
-            "      return render_error(cur, \"expected tagged event, got %s\","
-            "14, event_spelling(cur->type));\n"
+            "      return yaml_constructor_render_error(cur, \"expected tagged event, got %s\","
+            "14, yaml_constructor_event_spelling(cur->type));\n"
             "  }\n"
             "  if (tag[0] != '!' || tag[1] == '\\0') {\n"
-            "    return render_error(cur, \"value for tagged union must have"
+            "    return yaml_constructor_render_error(cur, \"value for tagged union must have"
             " specific local tag, got \\\"%s\\\"\", strlen((const char*)tag),"
             " (const char*)tag);\n"
             "  }\n", info->out);
@@ -1292,7 +1290,7 @@ static enum CXChildVisitResult tagged_visitor
               enum_descriptor->converter_decl + sizeof(CONVERTER_PREFIX),
               info->field_name);
       fputs("  if (!res) {\n"
-            "    return render_error(cur, \"not a valid tag: \\\"%s\\\"\","
+            "    return yaml_constructor_render_error(cur, \"not a valid tag: \\\"%s\\\"\","
             " strlen((const char*)tag), (const char*)tag);\n"
             "  }\n"
             "  char *ret = NULL;\n", info->out);
@@ -1333,7 +1331,7 @@ static bool gen_tagged_impls
   if (seen_empty_variants) {
     fputs("      if (cur->type != YAML_SCALAR_EVENT ||\n"
           "          (cur->data.scalar.value[0] != '\\0')) {\n"
-          "        ret = render_error(cur, \"tag %s does not allow content\","
+          "        ret = yaml_constructor_render_error(cur, \"tag %s does not allow content\","
           " strlen((const char*)tag), (const char*)tag);\n"
           "      } else ret = NULL;\n", out);
   }
@@ -1481,8 +1479,8 @@ static void process_struct_loaders(struct_dfa_t const *const dea,
               "      case %zu:\n"
               "        if (found[%zu]) {\n"
               "          size_t escaped_len;\n"
-              "          char *escaped = escape(name, &escaped_len);\n"
-              "          ret = render_error(&key, \"duplicate key: %%s\", "
+              "          char *escaped = yaml_constructor_escape(name, &escaped_len);\n"
+              "          ret = yaml_constructor_render_error(&key, \"duplicate key: %%s\", "
               "escaped_len, escaped);\n"
               "          free(escaped);\n"
               "        } else {\n"
@@ -1558,7 +1556,7 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
     dea.count = 0;
   }
   fputs("  if (cur->type != YAML_MAPPING_START_EVENT) {\n"
-        "    return wrong_event_error(YAML_MAPPING_START_EVENT, cur);\n"
+        "    return yaml_constructor_wrong_event_error(YAML_MAPPING_START_EVENT, cur);\n"
         "  }\n"
         "  yaml_event_t key;\n"
         "  yaml_parser_parse(parser, &key);\n"
@@ -1601,11 +1599,11 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
     fputs("};\n"
           "  while(key.type != YAML_MAPPING_END_EVENT) {\n"
           "    if (key.type != YAML_SCALAR_EVENT) {\n"
-          "      ret = wrong_event_error(YAML_SCALAR_EVENT, &key);\n"
+          "      ret = yaml_constructor_wrong_event_error(YAML_SCALAR_EVENT, &key);\n"
           "      break;\n"
           "    }\n"
           "    int8_t result;\n"
-          "    walk(table, key.data.scalar.value, ", out);
+          "    YAML_CONSTRUCTOR_WALK(table, key.data.scalar.value, ", out);
     fprintf(out, "%zu, %zu, result);\n", dea.min - 1, dea.max + 1);
     fputs("    yaml_event_t event;\n"
           "    yaml_parser_parse(parser, &event);\n"
@@ -1614,8 +1612,8 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
     process_struct_loaders(&dea, out);
     fputs("      default: {\n"
           "          size_t escaped_len;\n"
-          "          char *escaped = escape(name, &escaped_len);\n"
-          "          ret = render_error(&key, \"unknown field: %s\", escaped_len,"
+          "          char *escaped = yaml_constructor_escape(name, &escaped_len);\n"
+          "          ret = yaml_constructor_render_error(&key, \"unknown field: %s\", escaped_len,"
           "escaped);\n"
           "          free(escaped);\n"
           "        }\n"
@@ -1628,7 +1626,7 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
           "  }\n", out);
   } else {
     fputs("  if (key.type != YAML_MAPPING_END_EVENT) {\n"
-          "    ret = render_error(&key, \"mapping must be empty\", 0);\n"
+          "    ret = yaml_constructor_render_error(&key, \"mapping must be empty\", 0);\n"
           "  }\n", out);
   }
   fputs("  yaml_event_delete(&key);\n", out);
@@ -1637,7 +1635,7 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
           "    for (size_t i = 0; i < sizeof(found); i++) {\n"
           "      if (!found[i] && !optional[i]) {\n"
           "        const size_t name_len = strlen(names[i]);\n"
-          "        ret = render_error(cur, \"missing value for field \\\"%s\\\"\","
+          "        ret = yaml_constructor_render_error(cur, \"missing value for field \\\"%s\\\"\","
           " name_len, names[i]);\n"
           "        break;\n"
           "      }\n"
@@ -1765,7 +1763,7 @@ bool gen_enum_impls
   fprintf(out, "%s {\n", type_descriptor->converter_decl);
   put_control_table(&dea, out);
   fputs("  int8_t res;\n"
-        "  walk(table, (unsigned char*)value, ", out);
+        "  YAML_CONSTRUCTOR_WALK(table, (unsigned char*)value, ", out);
   fprintf(out, "%zu, %zu, res);\n", dea.min - 1, dea.max + 1);
   fputs("  switch(res) {\n", out);
   process_enum_nodes(&dea, out);
@@ -1777,7 +1775,7 @@ bool gen_enum_impls
   fprintf(out, "%s {\n", type_descriptor->constructor_decl);
   fputs("  (void)parser;\n"
         "  if (cur->type != YAML_SCALAR_EVENT) {\n"
-        "    return wrong_event_error(YAML_SCALAR_EVENT, cur);\n"
+        "    return yaml_constructor_wrong_event_error(YAML_SCALAR_EVENT, cur);\n"
         "  }\n"
         "  char *ret;\n", out);
   fprintf(out,
@@ -1787,9 +1785,9 @@ bool gen_enum_impls
   fputs("    ret = NULL;\n"
         "  } else {\n"
         "    size_t escaped_len;\n"
-        "    char *escaped = escape((const char*)cur->data.scalar.value, "
+        "    char *escaped = yaml_constructor_escape((const char*)cur->data.scalar.value, "
         "&escaped_len);\n"
-        "    ret = render_error(cur, \"unknown enum value: %s\", escaped_len,"
+        "    ret = yaml_constructor_render_error(cur, \"unknown enum value: %s\", escaped_len,"
         " escaped);\n"
         "    free(escaped);\n"
         "  }\n"
@@ -1844,7 +1842,8 @@ static void mark_as_predefined(type_descriptor_t *const descriptor) {
 }
 
 #define KNOWN_TYPE(name, constructor) {\
-  (void)&(constructor); /* ensure constructor exists */\
+  /* disabled because it requires a reference to the runtime in the generator */ \
+  /*(void)&(constructor); /* ensure constructor exists */\
   type_descriptor_t desc = {\
     .constructor_decl = "static char *" #constructor,\
     .constructor_name_len = sizeof(#constructor),\
@@ -1881,23 +1880,23 @@ int main(int const argc, char const *argv[]) {
   types_list.names.nodes[0]->type_index = -1;
 
   // known types
-  KNOWN_TYPE(short, construct_short);
-  KNOWN_TYPE(int, construct_int);
-  KNOWN_TYPE(long, construct_long);
-  KNOWN_TYPE(long long, construct_long_long);
+  KNOWN_TYPE(short, yaml_construct_short);
+  KNOWN_TYPE(int, yaml_construct_int);
+  KNOWN_TYPE(long, yaml_construct_long);
+  KNOWN_TYPE(long long, yaml_construct_long_long);
 
-  KNOWN_TYPE(unsigned char, construct_unsigned_char);
-  KNOWN_TYPE(unsigned short, construct_unsigned_short);
-  KNOWN_TYPE(unsigned, construct_unsigned);
-  KNOWN_TYPE(unsigned long, construct_unsigned_long);
-  KNOWN_TYPE(unsigned long long, construct_unsigned_long_long);
+  KNOWN_TYPE(unsigned char, yaml_construct_unsigned_char);
+  KNOWN_TYPE(unsigned short, yaml_construct_unsigned_short);
+  KNOWN_TYPE(unsigned, yaml_construct_unsigned);
+  KNOWN_TYPE(unsigned long, yaml_construct_unsigned_long);
+  KNOWN_TYPE(unsigned long long, yaml_construct_unsigned_long_long);
 
-  KNOWN_TYPE(float, construct_float);
-  KNOWN_TYPE(double, construct_double);
-  KNOWN_TYPE(long double, construct_long_double);
+  KNOWN_TYPE(float, yaml_construct_float);
+  KNOWN_TYPE(double, yaml_construct_double);
+  KNOWN_TYPE(long double, yaml_construct_long_double);
 
-  KNOWN_TYPE(char, construct_char);
-  KNOWN_TYPE(_Bool, construct_bool);
+  KNOWN_TYPE(char, yaml_construct_char);
+  KNOWN_TYPE(_Bool, yaml_construct_bool);
 
   type_info_t type_info = {.list = &types_list};
   type_info.recent_annotation.kind = ANN_NONE;
@@ -1924,9 +1923,10 @@ int main(int const argc, char const *argv[]) {
     return 1;
   }
   fprintf(out_impl,
-          "#include <libyaml_mapper_common.h>\n"
+          "#include <yaml_constructor.h>\n"
           "#include <stdbool.h>\n"
           "#include <locale.h>\n"
+          "#include <stdint.h>\n"
           "#include \"%s\"\n", config.output_header_name);
 
   write_decls(&types_list, out_impl);
@@ -1955,7 +1955,7 @@ int main(int const argc, char const *argv[]) {
           "  }\n"
           "  if (event.type != YAML_DOCUMENT_START_EVENT) {\n"
           "    yaml_event_delete(&event);\n"
-          "    return wrong_event_error(YAML_DOCUMENT_START_EVENT, &event);\n"
+          "    return yaml_constructor_wrong_event_error(YAML_DOCUMENT_START_EVENT, &event);\n"
           "  }\n"
           "  yaml_event_delete(&event);\n"
           "  yaml_parser_parse(parser, &event);\n"
