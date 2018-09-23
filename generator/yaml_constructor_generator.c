@@ -673,10 +673,10 @@ static enum CXChildVisitResult discover_types
 static void write_decls(types_list_t const *const list, FILE *const out) {
   static const char constructor_template[] =
       CONSTRUCTOR_PREFIX " construct_%s(%s *const value, "
-      "yaml_parser_t *const parser, yaml_event_t *cur)";
+      "yaml_loader_t *const loader, yaml_event_t *cur)";
   static const char elaborated_constructor_template[] =
       CONSTRUCTOR_PREFIX " construct_%.*s__%s(%s *const value, "
-      "yaml_parser_t *const parser, yaml_event_t *cur)";
+      "yaml_loader_t *const loader, yaml_event_t *cur)";
   static const char destructor_template[] =
       DESTRUCTOR_PREFIX " delete_%s(%s *const value)";
   static const char elaborated_destructor_template[] =
@@ -913,20 +913,46 @@ bool gen_list_impls(type_descriptor_t const *const type_descriptor,
 
   fprintf(out,
           "  if (cur->type != YAML_SEQUENCE_START_EVENT) {\n"
-          "    return yaml_constructor_wrong_event_error(YAML_SEQUENCE_START_EVENT, cur);\n"
+          "    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\n"
+          "    loader->error_info.event = *cur;\n"
+          "    loader->error_info.expected_event_type = YAML_SEQUENCE_START_EVENT;\n"
+          "    return false;"
           "  }\n"
           "  value->data = malloc(16 * sizeof(%s));\n"
+          "  if (value->data == NULL) {\n"
+          "    loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;\n"
+          "    yaml_event_delete(cur);\n"
+          "    return false;\n"
+          "  }\n"
           "  value->count = 0;\n"
           "  value->capacity = 16;\n"
           "  yaml_event_t event;\n"
-          "  yaml_parser_parse(parser, &event);\n"
+          "  if (yaml_parser_parse(&loader->parser, &event) == 0) {\n"
+          "    loader->error_info.type = YAML_LOADER_ERROR_PARSER;\n"
+          "    yaml_event_delete(cur);\n"
+          "    return false;\n"
+          "  }\n"
           "  while (event.type != YAML_SEQUENCE_END_EVENT) {\n"
           "    %s *item;\n"
           "    YAML_CONSTRUCTOR_APPEND(value, item);\n"
-          "    char *ret = %.*s(item, parser, &event);\n"
-          "    yaml_event_delete(&event);\n"
+          "    bool ret = false;\n"
+          "    if (item == NULL) {\n"
+          "      loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;\n"
+          "      yaml_event_delete(cur);\n"
+          "    } else {\n"
+          "      ret = %.*s(item, loader, &event);\n"
+          "    }\n"
           "    if (ret) {\n"
-          "      value->count--;\n",
+          "      yaml_event_delete(&event);\n"
+          "      if (yaml_parser_parse(&loader->parser, &event) == 0) {\n"
+          "        loader->error_info.type = YAML_LOADER_ERROR_PARSER;\n"
+          "        yaml_event_delete(cur);\n"
+          "        ret = false;\n"
+          "      }\n"
+          "    } else {\n"
+          "      value->count--;\n"
+          "    }\n"
+          "    if (!ret) {\n",
           complete_name, complete_name,
           (int)inner_type->constructor_name_len,
           inner_type->constructor_decl + sizeof(CONSTRUCTOR_PREFIX));
@@ -936,12 +962,11 @@ bool gen_list_impls(type_descriptor_t const *const type_descriptor,
     fprintf(out, "    %s\n", destructor_call);
     free(destructor_call);
   }
-  fputs("      return ret;\n"
+  fputs("        return false;\n"
           "    }\n"
-          "    yaml_parser_parse(parser, &event);\n"
           "  }\n"
           "  yaml_event_delete(&event);\n"
-          "  return NULL;\n}\n", out);
+          "  return true;\n}\n", out);
 
   if (type_descriptor->type.kind != CXType_Unexposed) {
     fprintf(out, "%s {\n", type_descriptor->destructor_decl);
@@ -971,7 +996,7 @@ static char *new_deserialization
      size_t const constructor_len, char const *const event_ref,
      bool const is_pointer) {
   static const char template[] =
-      "ret = %.*s(%svalue->%s, parser, %s);\n";
+      "ret = %.*s(%svalue->%s, loader, %s);\n";
   size_t const tmpl_len = sizeof(template) - 1;
 
   size_t const res_len = tmpl_len + strlen(field) + constructor_len +
@@ -1120,7 +1145,7 @@ static char *gen_field_deserialization
       size_t const value_deser_len = strlen(value_deserialization);
       static char const malloc_templ[] =
           "value->%s = malloc(sizeof(%s));\n          %s"
-          "          if (ret != NULL) free(value->%s);\n";
+          "          if (!ret) free(value->%s);\n";
       size_t const full_len = sizeof(malloc_templ) - 8 + value_deser_len +
                               strlen(name) * 2 + strlen(descriptor->spelling);
       char *const buffer = malloc(full_len);
@@ -1262,6 +1287,10 @@ static enum CXChildVisitResult tagged_visitor
                     clang_getCString(clang_getTypeSpelling(t)));
         TAGGED_VISITOR_ERROR;
       }
+      type_descriptor_t *enum_descriptor =
+          &info->types_list->data[info->enum_type_id];
+      fprintf(info->out,
+              "  const char typename[] = \"%s\";\n", enum_descriptor->spelling);
       fputs("  yaml_char_t *tag;\n"
             "  switch(cur->type) {\n"
             "    case YAML_SCALAR_EVENT:\n"
@@ -1274,26 +1303,43 @@ static enum CXChildVisitResult tagged_visitor
             "      tag = cur->data.sequence_start.tag;\n"
             "      break;\n"
             "    default:\n"
-            "      return yaml_constructor_render_error(cur, \"expected tagged event, got %s\","
-            "14, yaml_constructor_event_spelling(cur->type));\n"
+            "      loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\n"
+            "      loader->error_info.event = *cur;\n"
+            "      loader->error_info.expected_event_type = YAML_SCALAR_EVENT;\n"
+            "      return false;\n"
             "  }\n"
-            "  if (tag[0] != '!' || tag[1] == '\\0') {\n"
-            "    return yaml_constructor_render_error(cur, \"value for tagged union must have"
-            " specific local tag, got \\\"%s\\\"\", strlen((const char*)tag),"
-            " (const char*)tag);\n"
+            "  if (tag[0] != '!' || tag[1] == '\\0') {\n", info->out);
+      fputs("    loader->expected = malloc(sizeof(typename));\n"
+            "    if (loader->expected == NULL) {\n"
+            "      loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;\n"
+            "      yaml_event_delete(cur);\n"
+            "    } else {\n"
+            "      loader->error_info.type = YAML_LOADER_ERROR_TAG;\n"
+            "      memcpy(loader->error_info.expected, typename,"
+            "             sizeof(typename));\n"
+            "      loader->error_info.event = *cur;\n"
+            "    }\n"
+            "    return false;\n"
             "  }\n", info->out);
-      type_descriptor_t *enum_descriptor =
-          &info->types_list->data[info->enum_type_id];
       fprintf(info->out,
               "  bool res = %.*s((const char*)(tag + 1), &value->%s);\n",
               (int)enum_descriptor->converter_name_len,
               enum_descriptor->converter_decl + sizeof(CONVERTER_PREFIX),
               info->field_name);
       fputs("  if (!res) {\n"
-            "    return yaml_constructor_render_error(cur, \"not a valid tag: \\\"%s\\\"\","
-            " strlen((const char*)tag), (const char*)tag);\n"
+            "    loader->expected = malloc(sizeof(typename));\n"
+            "    if (loader->expected == NULL) {\n"
+            "      loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;\n"
+            "      yaml_event_delete(cur);\n"
+            "    } else {\n"
+            "      loader->error_info.type = YAML_LOADER_ERROR_TAG;\n"
+            "      memcpy(loader->error_info.expected, typename,"
+            "             sizeof(typename));\n"
+            "      loader->error_info.event = *cur;\n"
+            "    }\n"
+            "    return false;\n"
             "  }\n"
-            "  char *ret = NULL;\n", info->out);
+            "  bool ret = false;\n", info->out);
       fprintf(info->out, "  switch(value->%s) {\n", info->field_name);
       info->state = TAGGED_UNION;
       info->cur = 0;
@@ -1331,9 +1377,17 @@ static bool gen_tagged_impls
   if (seen_empty_variants) {
     fputs("      if (cur->type != YAML_SCALAR_EVENT ||\n"
           "          (cur->data.scalar.value[0] != '\\0')) {\n"
-          "        ret = yaml_constructor_render_error(cur, \"tag %s does not allow content\","
-          " strlen((const char*)tag), (const char*)tag);\n"
-          "      } else ret = NULL;\n", out);
+          "        loader->expected = malloc(sizeof(typename));\n"
+          "        if (loader->expected == NULL) {\n"
+          "          loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;\n"
+          "          yaml_event_delete(cur);\n"
+          "        } else {\n"
+          "          loader->error_info.type = YAML_LOADER_ERROR_TAG;\n"
+          "          memcpy(loader->error_info.expected, typename,"
+          "                 sizeof(typename));\n"
+          "          loader->error_info.event = *cur;\n"
+          "        }\n"
+          "      } else ret = true;\n", out);
   }
   fputs("  }\n"
         "  return ret;\n}\n", out);
@@ -1478,18 +1532,33 @@ static void process_struct_loaders(struct_dfa_t const *const dea,
       fprintf(out,
               "      case %zu:\n"
               "        if (found[%zu]) {\n"
-              "          size_t escaped_len;\n"
-              "          char *escaped = yaml_constructor_escape(name, &escaped_len);\n"
-              "          ret = yaml_constructor_render_error(&key, \"duplicate key: %%s\", "
-              "escaped_len, escaped);\n"
-              "          free(escaped);\n"
+              "          loader->error_info.expected = malloc(name_len);\n"
+              "          if (loader->error_info.expected == NULL) {\n"
+              "            loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;\n"
+              "            yaml_event_delete(&key);\n"
+              "          } else {\n"
+              "            loader->error_info.type = YAML_LOADER_ERROR_DUPLICATE_KEY;\n"
+              "            memcpy(loader->error_info.expected, name, name_len);\n"
+              "            loader->error_info.event = key;\n"
+              "          }\n"
+              "          ret = false;\n"
               "        } else {\n"
               "          found[%zu] = true;\n"
+              "          if (yaml_parser_parse(&loader->parser, &event) == 0) {\n"
+              "            loader->error_info.type = YAML_LOADER_ERROR_PARSER;\n"
+              "            yaml_event_delete(&key);\n"
+              "            ret = false;\n"
+              "          } else {\n"
               "          ", i, index, index);
       fputs(dea->nodes[i]->loader_implementation, out);
-      fprintf(out, "          if (ret != NULL) found[%zu] = false;\n"
-                   "        }\n"
-                   "        break;\n", index);
+      fprintf(out,
+              "            if (ret) {\n"
+              "              yaml_event_delete(&event);\n"
+              "            } else {\n"
+              "              found[%zu] = false;\n"
+              "           }\n"
+              "        }\n"
+              "        break;\n", index);
       index++;
     }
   }
@@ -1556,11 +1625,17 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
     dea.count = 0;
   }
   fputs("  if (cur->type != YAML_MAPPING_START_EVENT) {\n"
-        "    return yaml_constructor_wrong_event_error(YAML_MAPPING_START_EVENT, cur);\n"
+        "    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\n"
+        "    loader->error_info.event = *cur;\n"
+        "    loader->error_info.expected_event_type = YAML_MAPPING_START_EVENT;\n"
         "  }\n"
         "  yaml_event_t key;\n"
-        "  yaml_parser_parse(parser, &key);\n"
-        "  char *ret = NULL;\n", out);
+        "  if (yaml_parser_parse(&loader->parser, &key) == 0) {\n"
+        "    loader->error_info.type = YAML_LOADER_ERROR_PARSER;\n"
+        "    yaml_event_delete(cur);\n"
+        "    return false;\n"
+        "  }\n"
+        "  bool ret = true;\n", out);
   if (dea.count > 0) {
     fputs("  bool found[] = {", out);
     bool first = true;
@@ -1599,48 +1674,71 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
     fputs("};\n"
           "  while(key.type != YAML_MAPPING_END_EVENT) {\n"
           "    if (key.type != YAML_SCALAR_EVENT) {\n"
-          "      ret = yaml_constructor_wrong_event_error(YAML_SCALAR_EVENT, &key);\n"
+          "      loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\n"
+          "      loader->error_info.event = key;\n"
+          "      loader->error_info.expected_event_type = YAML_SCALAR_EVENT;\n"
+          "      ret = false;\n"
           "      break;\n"
           "    }\n"
           "    int8_t result;\n"
           "    YAML_CONSTRUCTOR_WALK(table, key.data.scalar.value, ", out);
     fprintf(out, "%zu, %zu, result);\n", dea.min - 1, dea.max + 1);
     fputs("    yaml_event_t event;\n"
-          "    yaml_parser_parse(parser, &event);\n"
           "    const char *const name = (const char*)key.data.scalar.value;\n"
+          "    const size_t name_len = strlen(name) + 1;\n"
           "    switch(result) {\n", out);
     process_struct_loaders(&dea, out);
     fputs("      default: {\n"
-          "          size_t escaped_len;\n"
-          "          char *escaped = yaml_constructor_escape(name, &escaped_len);\n"
-          "          ret = yaml_constructor_render_error(&key, \"unknown field: %s\", escaped_len,"
-          "escaped);\n"
-          "          free(escaped);\n"
+          "        loader->error_info.expected = malloc(name_len);\n"
+          "        if (loader->error_info.expected == NULL) {\n"
+          "          loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;\n"
+          "          yaml_event_delete(&key);\n"
+          "        } else {\n"
+          "          loader->error_info.type = YAML_LOADER_ERROR_UNKNOWN_KEY;\n"
+          "          memcpy(loader->error_info.expected, name, name_len);\n"
+          "          loader->error_info.event = key;\n"
           "        }\n"
-          "        break;\n"
-          "    }\n"
-          "    yaml_event_delete(&event);\n"
-          "    if (ret != NULL) break;\n"
-          "    yaml_event_delete(&key);\n"
-          "    yaml_parser_parse(parser, &key);\n"
-          "  }\n", out);
-  } else {
-    fputs("  if (key.type != YAML_MAPPING_END_EVENT) {\n"
-          "    ret = yaml_constructor_render_error(&key, \"mapping must be empty\", 0);\n"
-          "  }\n", out);
-  }
-  fputs("  yaml_event_delete(&key);\n", out);
-  if (dea.count > 0) {
-    fputs("  if (!ret) {\n"
-          "    for (size_t i = 0; i < sizeof(found); i++) {\n"
-          "      if (!found[i] && !optional[i]) {\n"
-          "        const size_t name_len = strlen(names[i]);\n"
-          "        ret = yaml_constructor_render_error(cur, \"missing value for field \\\"%s\\\"\","
-          " name_len, names[i]);\n"
+          "        ret = false;\n"
           "        break;\n"
           "      }\n"
           "    }\n"
-          "  }\n"
+          "    if (!ret) break;\n"
+          "    yaml_event_delete(&key);\n"
+          "    if (yaml_parser_parse(&loader->parser, &key) == 0) {\n"
+          "      loader->error_info.type = YAML_LOADER_ERROR_PARSER;\n"
+          "      ret = false;\n"
+          "      break;\n"
+          "    }\n"
+          "  }\n", out);
+  } else {
+    fputs("  if (key.type != YAML_MAPPING_END_EVENT) {\n"
+          "    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\n"
+          "    loader->error_info.event = key;\n"
+          "    loader->error_info.expected_event_type = YAML_MAPPING_END_EVENT;\n"
+          "    yaml_event_delete(cur);\n"
+          "    return false;\n"
+          "  }\n", out);
+  }
+  if (dea.count > 0) {
+    fputs("  if (ret) {\n"
+          "    yaml_event_delete(&key);\n"
+          "    for (size_t i = 0; i < sizeof(found); i++) {\n"
+          "      if (!found[i] && !optional[i]) {\n"
+          "        const size_t missing_len = strlen(names[i]) + 1;\n"
+          "        loader->error_info.expected = malloc(missing_len);\n"
+          "        if (loader->error_info.expected == NULL) {\n"
+          "          loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;\n"
+          "          yaml_event_delete(cur);\n"
+          "        } else {\n"
+          "          loader->error_info.type = YAML_LOADER_ERROR_MISSING_KEY;\n"
+          "          memcpy(loader->error_info.expected, names[i], missing_len);\n"
+          "          loader->error_info.event = *cur;\n"
+          "          ret = false;\n"
+          "        }\n"
+          "        break;\n"
+          "      }\n"
+          "    }\n"
+          "  } else yaml_event_delete(cur);\n"
           "  if (ret) {\n", out);
     process_struct_cleanup(&dea, out);
     fputs("  }\n", out);
@@ -1773,25 +1871,34 @@ bool gen_enum_impls
         "}\n\n", out);
 
   fprintf(out, "%s {\n", type_descriptor->constructor_decl);
-  fputs("  (void)parser;\n"
+  fputs("  (void)loader;\n"
         "  if (cur->type != YAML_SCALAR_EVENT) {\n"
-        "    return yaml_constructor_wrong_event_error(YAML_SCALAR_EVENT, cur);\n"
-        "  }\n"
-        "  char *ret;\n", out);
+        "    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\n"
+        "    loader->error_info.event = *cur;\n"
+        "    loader->error_info.expected_event_type = YAML_SCALAR_EVENT;\n"
+        "    return false;\n"
+        "  }\n", out);
   fprintf(out,
         "  if (%.*s((const char*)cur->data.scalar.value, value)) {\n",
           (int)type_descriptor->converter_name_len,
           type_descriptor->converter_decl + sizeof(CONVERTER_PREFIX));
-  fputs("    ret = NULL;\n"
+  fputs("    return true;\n"
         "  } else {\n"
-        "    size_t escaped_len;\n"
-        "    char *escaped = yaml_constructor_escape((const char*)cur->data.scalar.value, "
-        "&escaped_len);\n"
-        "    ret = yaml_constructor_render_error(cur, \"unknown enum value: %s\", escaped_len,"
-        " escaped);\n"
-        "    free(escaped);\n"
+        "    loader->error_info.type = YAML_LOADER_ERROR_VALUE;\n"
+        "    loader->error_info.event = *cur;\n", out);
+  fprintf(out,
+        "    const char typename[] = \"%s\";\n", type_descriptor->spelling);
+  fputs("    loader->error_info.expected = malloc(sizeof(typename));\n"
+        "    if (loader->error_info.expected == NULL) {\n"
+        "      loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;\n"
+        "      yaml_event_delete(cur);\n"
+        "    } else {\n"
+        "      loader->error_info.type = YAML_LOADER_ERROR_VALUE;\n"
+        "      memcpy(loader->error_info.expected, typename, sizeof(typename));\n"
+        "      loader->error_info.event = *cur;\n"
+        "    }\n"
+        "    return false;\n"
         "  }\n"
-        "  return ret;\n"
         "}\n\n", out);
   return true;
 }
@@ -1845,7 +1952,7 @@ static void mark_as_predefined(type_descriptor_t *const descriptor) {
   /* disabled because it requires a reference to the runtime in the generator */ \
   /*(void)&(constructor); /* ensure constructor exists */\
   type_descriptor_t desc = {\
-    .constructor_decl = "static char *" #constructor,\
+    .constructor_decl = "bool " #constructor,\
     .constructor_name_len = sizeof(#constructor),\
     .destructor_decl = NULL, .destructor_name_len = 0};\
   mark_as_predefined(&desc);\
@@ -1936,11 +2043,11 @@ int main(int const argc, char const *argv[]) {
       clang_getCString(clang_getTypeSpelling(root_type->type));
   const char *const space = strchr(type_spelling, ' ');
   if (space == NULL) {
-    fprintf(out_impl, "char *load_one_%s(%s *value, yaml_parser_t *parser) {\n",
+    fprintf(out_impl, "bool load_one_%s(%s *value, yaml_loader_t *loader) {\n",
             type_spelling, type_spelling);
   } else {
     fprintf(out_impl,
-            "char *load_one_%.*s__%s(%s *value, yaml_parser_t *parser) {\n",
+            "bool load_one_%.*s__%s(%s *value, yaml_loader_t *loader) {\n",
             (int)(space - type_spelling), type_spelling, space + 1,
             type_spelling);
   }
@@ -1948,21 +2055,42 @@ int main(int const argc, char const *argv[]) {
           "  char *old_locale = setlocale(LC_NUMERIC, NULL);\n"
           "  setlocale(LC_NUMERIC, \"C\");\n"
           "  yaml_event_t event;\n"
-          "  yaml_parser_parse(parser, &event);\n"
+          "  if (yaml_parser_parse(&loader->parser, &event) == 0) {\n"
+          "    loader->error_info.type = YAML_LOADER_ERROR_PARSER;\n"
+          "    return false;\n"
+          "  }\n"
           "  if (event.type == YAML_STREAM_START_EVENT) {\n"
           "    yaml_event_delete(&event);\n"
-          "    yaml_parser_parse(parser, &event);\n"
+          "    if (yaml_parser_parse(&loader->parser, &event) == 0) {\n"
+          "      loader->error_info.type = YAML_LOADER_ERROR_PARSER;\n"
+          "      return false;\n"
+          "    }\n"
           "  }\n"
           "  if (event.type != YAML_DOCUMENT_START_EVENT) {\n"
-          "    yaml_event_delete(&event);\n"
-          "    return yaml_constructor_wrong_event_error(YAML_DOCUMENT_START_EVENT, &event);\n"
+          "    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\n"
+          "    loader->error_info.event = event;\n"
+          "    loader->error_info.expected_event_type = YAML_DOCUMENT_START_EVENT;\n"
+          "    return false;\n"
           "  }\n"
           "  yaml_event_delete(&event);\n"
-          "  yaml_parser_parse(parser, &event);\n"
-          "  char *ret = %.*s(value, parser, &event);\n"
-          "  yaml_event_delete(&event);\n"
-          "  yaml_parser_parse(parser, &event); // assume document end\n"
-          "  yaml_event_delete(&event);\n"
+          "  if (yaml_parser_parse(&loader->parser, &event) == 0) {\n"
+          "    loader->error_info.type = YAML_LOADER_ERROR_PARSER;\n"
+          "    return false;\n"
+          "  }\n"
+          "  bool ret = %.*s(value, &loader->parser, &event);\n"
+          "  if (ret) {\n"
+          "    yaml_event_delete(&event);\n"
+          "    if (yaml_parser_parse(&loader->parser, &event) == 0) {\n"
+          "      loader->error_info.type = YAML_LOADER_ERROR_PARSER;\n"
+          "      return false;\n"
+          "    } else if (event.type != YAML_DOCUMENT_END_EVENT) {\n"
+          "      loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\n"
+          "      loader->error_info.event = event;\n"
+          "      loader->error_info.expected_event_type = YAML_DOCUMENT_END_EVENT;\n"
+          "      return false;\n"
+          "    }\n"
+          "    yaml_event_delete(&event);\n"
+          "  }\n"
           "  setlocale(LC_NUMERIC, old_locale);\n"
           "  return ret;\n"
           "}\n", (int)root_type->constructor_name_len,
@@ -1995,12 +2123,12 @@ int main(int const argc, char const *argv[]) {
           "#include <yaml.h>\n"
           "#include <%s>\n", config.input_file_name);
   if (space == NULL) {
-    fprintf(header_out, "char *load_one_%s(%s *value, yaml_parser_t *parser);\n"
+    fprintf(header_out, "bool load_one_%s(%s *value, yaml_loader_t *loader);\n"
                         "void free_one_%s(%s *value);\n",
             type_spelling, type_spelling, type_spelling, type_spelling);
   } else {
     fprintf(header_out,
-            "char *load_one_%.*s__%s(%s *value, yaml_parser_t *parser);\n"
+            "bool load_one_%.*s__%s(%s *value, yaml_loader_t *loader);\n"
             "void free_one_%.*s__%s(%s *value);\n",
             (int)(space - type_spelling), type_spelling, space + 1,
             type_spelling, (int)(space - type_spelling), type_spelling,

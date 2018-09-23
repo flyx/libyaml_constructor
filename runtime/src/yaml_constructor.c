@@ -5,6 +5,7 @@
 #include <limits.h>
 #include <stdarg.h>
 #include <assert.h>
+#include <yaml_loader.h>
 
 char* yaml_constructor_escape(const char* const string, size_t* const size) {
 	size_t needed = 0;
@@ -87,34 +88,31 @@ char* yaml_constructor_wrong_event_error(yaml_event_type_t expected,
 }
 
 #define DEFINE_INT_CONSTRUCTOR(name, value_type, min, max)\
-char* name(value_type *const value, yaml_parser_t *const parser,\
+bool name(value_type *const value, yaml_loader_t *const loader,\
                   yaml_event_t *cur) {\
-  (void)parser;\
   if (cur->type != YAML_SCALAR_EVENT) {\
-    return yaml_constructor_wrong_event_error(YAML_SCALAR_EVENT, cur);\
+    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\
+    loader->error_info.event = *cur;\
+    loader->error_info.expected_event_type = YAML_SCALAR_EVENT;\
+    return false;\
   }\
   char* result;\
   long long res = strtoll((const char*)cur->data.scalar.value, &result, 10);\
-  if (*result != '\0') {\
-    size_t escaped_len;\
-    char* escaped = yaml_constructor_escape(\
-        (const char*)cur->data.scalar.value, &escaped_len);\
-    char* buffer = yaml_constructor_render_error(cur, \
-        "cannot read %s as int!", escaped_len, escaped);\
-    free(escaped);\
-    return buffer;\
-  } else if (res < min || res > max) {\
-    size_t escaped_len;\
-    char* escaped = yaml_constructor_escape(\
-        (const char*)cur->data.scalar.value, &escaped_len);\
-    char* buffer = yaml_constructor_render_error(cur,\
-        "int value of %s outside representable range!",\
-        escaped_len, escaped);\
-    free(escaped);\
-    return buffer;\
+  if (*result != '\0' || res < min || res > max) {\
+    const char typename[] = #value_type;\
+    loader->error_info.expected = malloc(sizeof(typename));\
+    if (loader->error_info.expected == NULL) {\
+      loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;\
+      yaml_event_delete(cur);\
+    } else {\
+      loader->error_info.type = YAML_LOADER_ERROR_VALUE;\
+      memcpy(loader->error_info.expected, typename, sizeof(typename));\
+      loader->error_info.event = *cur;\
+    }\
+    return false;\
   }\
   *value = (value_type)res;\
-  return NULL;\
+  return true;\
 }
 
 DEFINE_INT_CONSTRUCTOR(yaml_construct_short, short, SHRT_MIN, SHRT_MAX)
@@ -124,36 +122,32 @@ DEFINE_INT_CONSTRUCTOR(yaml_construct_long_long, long long, LLONG_MIN,
 	LLONG_MAX)
 
 #define DEFINE_UNSIGNED_CONSTRUCTOR(name, value_type, max) \
-char* name(value_type *const value, yaml_parser_t *const parser,\
+bool name(value_type *const value, yaml_loader_t *const loader,\
                   yaml_event_t* cur) {\
-  (void)parser;\
   if (cur->type != YAML_SCALAR_EVENT) {\
-    return yaml_constructor_wrong_event_error(YAML_SCALAR_EVENT, cur);\
+    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\
+    loader->error_info.event = *cur;\
+    loader->error_info.expected_event_type = YAML_SCALAR_EVENT;\
+    return false;\
   }\
   char* result;\
   unsigned long long res =\
       strtoull((const char*)cur->data.scalar.value, &result, 10);\
-  if (*result != '\0') {\
-    size_t escaped_len;\
-    char *escaped = yaml_constructor_escape(\
-        (const char *) cur->data.scalar.value, &escaped_len);\
-    char *buffer = yaml_constructor_render_error(\
-        cur, "cannot read %s as " #value_type "!",\
-        escaped_len, escaped);\
-    free(escaped);\
-    return buffer;\
-  } else if (res > (max)) {\
-    size_t escaped_len;\
-    char* escaped = yaml_constructor_escape(\
-        (const char*)cur->data.scalar.value, &escaped_len);\
-    char* buffer = yaml_constructor_render_error(\
-        cur, "size_t value of %s outside representable range!",\
-        escaped_len, escaped);\
-    free(escaped);\
-    return buffer;\
+   if (*result != '\0' || res > max) {\
+    const char typename[] = #value_type;\
+    loader->error_info.expected = malloc(sizeof(typename));\
+    if (loader->error_info.expected == NULL) {\
+      loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;\
+      yaml_event_delete(cur);\
+    } else {\
+      loader->error_info.type = YAML_LOADER_ERROR_VALUE;\
+      memcpy(loader->error_info.expected, typename, sizeof(typename));\
+      loader->error_info.event = *cur;\
+    }\
+    return false;\
   }\
   *value = (value_type)res;\
-  return NULL;\
+  return true;\
 }
 
 DEFINE_UNSIGNED_CONSTRUCTOR(yaml_construct_unsigned_char, unsigned char,
@@ -166,44 +160,57 @@ DEFINE_UNSIGNED_CONSTRUCTOR(yaml_construct_unsigned_long, unsigned long,
 DEFINE_UNSIGNED_CONSTRUCTOR(yaml_construct_unsigned_long_long,
 	unsigned long long, ULLONG_MAX)
 
- char* yaml_construct_string(char** const value, yaml_parser_t *const parser,
+ bool yaml_construct_string(char** const value, yaml_loader_t *const loader,
 		yaml_event_t* cur) {
-	(void)parser;
 	if (cur->type != YAML_SCALAR_EVENT) {
-		return yaml_constructor_wrong_event_error(YAML_SCALAR_EVENT, cur);
+    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;
+    loader->error_info.event = *cur;
+    loader->error_info.expected_event_type = YAML_SCALAR_EVENT;
+    return false;
 	}
 	size_t len = strlen((char*)cur->data.scalar.value) + 1;
 	*value = malloc(len);
+	if (*value == NULL) {
+	  loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;
+	  yaml_event_delete(cur);
+	  return false;
+	}
 	memcpy(*value, cur->data.scalar.value, len);
-	return NULL;
+	return true;
 }
 
-char* yaml_construct_char(char *const value, yaml_parser_t *const parser,
-	yaml_event_t* cur) {
-	(void)parser;
+bool yaml_construct_char(char *const value, yaml_loader_t *const loader,
+                         yaml_event_t* cur) {
 	if (cur->type != YAML_SCALAR_EVENT) {
-		return yaml_constructor_wrong_event_error(YAML_SCALAR_EVENT, cur);
-	}
-	else if (cur->data.scalar.value[0] == '\0' ||
-		cur->data.scalar.value[1] != '\0') {
-		size_t escaped_len;
-		char* escaped = yaml_constructor_escape(
-			(const char*)cur->data.scalar.value, &escaped_len);
-		char* buffer = yaml_constructor_render_error(
-			cur, "expected single character, got %s",
-			escaped_len, escaped);
-		free(escaped);
-		return buffer;
-	}
+    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;
+    loader->error_info.event = *cur;
+    loader->error_info.expected_event_type = YAML_SCALAR_EVENT;
+    return false;
+	} else if (cur->data.scalar.value[0] == '\0' ||
+             cur->data.scalar.value[1] != '\0') {
+    const char typename[] = "char";
+    loader->error_info.expected = malloc(sizeof(typename));
+    if (loader->error_info.expected == NULL) {
+      loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;
+      yaml_event_delete(cur);
+    } else {
+      loader->error_info.type = YAML_LOADER_ERROR_VALUE;
+      memcpy(loader->error_info.expected, typename, sizeof(typename));
+      loader->error_info.event = *cur;
+    }
+    return false;
+  }
 	*value = cur->data.scalar.value[0];
-	return NULL;
+	return true;
 }
 
-char* yaml_construct_bool(bool *const value, yaml_parser_t *const parser,
+bool yaml_construct_bool(bool *const value, yaml_loader_t *const loader,
 	yaml_event_t* cur) {
-	(void)parser;
 	if (cur->type != YAML_SCALAR_EVENT) {
-		return yaml_constructor_wrong_event_error(YAML_SCALAR_EVENT, cur);
+    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;
+    loader->error_info.event = *cur;
+    loader->error_info.expected_event_type = YAML_SCALAR_EVENT;
+    return false;
 	}
 	else if (strcmp("true", (const char*)cur->data.scalar.value) == 0) {
 		*value = true;
@@ -212,38 +219,46 @@ char* yaml_construct_bool(bool *const value, yaml_parser_t *const parser,
 		*value = false;
 	}
 	else {
-		size_t escaped_len;
-		char* escaped = yaml_constructor_escape(
-			(const char*)cur->data.scalar.value, &escaped_len);
-		char* buffer = yaml_constructor_render_error(
-			cur, "expected boolean value, got %s",
-			escaped_len, escaped);
-		free(escaped);
-		return buffer;
+    const char typename[] = "bool";
+    loader->error_info.expected = malloc(sizeof(typename));
+    if (loader->error_info.expected == NULL) {
+      loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;
+      yaml_event_delete(cur);
+    } else {
+      loader->error_info.type = YAML_LOADER_ERROR_VALUE;
+      memcpy(loader->error_info.expected, typename, sizeof(typename));
+      loader->error_info.event = *cur;
+    }
+    return false;
 	}
-	return NULL;
+	return true;
 }
 
 #define DEFINE_FP_CONSTRUCTOR(name, value_type, overflow, func) \
-char* name(value_type *const value, yaml_parser_t *const parser,\
+bool name(value_type *const value, yaml_loader_t *const loader,\
                   yaml_event_t* cur) {\
-  (void)parser;\
   if (cur->type != YAML_SCALAR_EVENT) {\
-    return yaml_constructor_wrong_event_error(YAML_SCALAR_EVENT, cur);\
+    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\
+    loader->error_info.event = *cur;\
+    loader->error_info.expected_event_type = YAML_SCALAR_EVENT;\
+    return false;\
   }\
   char* end_ptr;\
   *value = func((const char*)cur->data.scalar.value, &end_ptr);\
   if (*end_ptr != '\0' || *value == (overflow)) {\
-    size_t escaped_len;\
-    char* escaped = yaml_constructor_escape(\
-        (const char*)cur->data.scalar.value, &escaped_len);\
-    char* buffer = yaml_constructor_render_error(\
-        cur, "cannot parse as " #value_type \
-        " value: %s", escaped_len, escaped);\
-    free(escaped);\
-    return buffer;\
+    const char typename[] = #value_type;\
+    loader->error_info.expected = malloc(sizeof(typename));\
+    if (loader->error_info.expected == NULL) {\
+      loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;\
+      yaml_event_delete(cur);\
+    } else {\
+      loader->error_info.type = YAML_LOADER_ERROR_VALUE;\
+      memcpy(loader->error_info.expected, typename, sizeof(typename));\
+      loader->error_info.event = *cur;\
+    }\
+    return false;\
   }\
-  return NULL;\
+  return true;\
 }
 
 DEFINE_FP_CONSTRUCTOR(yaml_construct_float, float, HUGE_VALF, strtof)
