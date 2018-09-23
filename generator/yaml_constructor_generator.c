@@ -91,7 +91,7 @@ typedef struct {
   ptr_kind pointer;
 } type_flags_t;
 
-#define CONSTRUCTOR_PREFIX "static char*"
+#define CONSTRUCTOR_PREFIX "bool"
 #define CONVERTER_PREFIX "static bool"
 #define DESTRUCTOR_PREFIX "static void"
 
@@ -483,6 +483,7 @@ static bool gen_type_descriptor(CXCursor const cursor, CXType const type,
       PTR_OPTIONAL_VALUE : (annotation->kind == ANN_STRING) ? PTR_STRING_VALUE :
                            (annotation->kind == ANN_OPTIONAL_STRING) ?
                            PTR_OPTIONAL_STRING_VALUE : PTR_NONE;
+  result->spelling = clang_getCString(clang_getTypeSpelling(type));
   return true;
 }
 
@@ -916,7 +917,7 @@ bool gen_list_impls(type_descriptor_t const *const type_descriptor,
           "    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\n"
           "    loader->error_info.event = *cur;\n"
           "    loader->error_info.expected_event_type = YAML_SEQUENCE_START_EVENT;\n"
-          "    return false;"
+          "    return false;\n"
           "  }\n"
           "  value->data = malloc(16 * sizeof(%s));\n"
           "  if (value->data == NULL) {\n"
@@ -941,6 +942,10 @@ bool gen_list_impls(type_descriptor_t const *const type_descriptor,
           "      yaml_event_delete(cur);\n"
           "    } else {\n"
           "      ret = %.*s(item, loader, &event);\n"
+          "      if (!ret) {\n"
+          "        value->count--;\n"
+          "        yaml_event_delete(cur);\n"
+          "      }\n"
           "    }\n"
           "    if (ret) {\n"
           "      yaml_event_delete(&event);\n"
@@ -949,8 +954,6 @@ bool gen_list_impls(type_descriptor_t const *const type_descriptor,
           "        yaml_event_delete(cur);\n"
           "        ret = false;\n"
           "      }\n"
-          "    } else {\n"
-          "      value->count--;\n"
           "    }\n"
           "    if (!ret) {\n",
           complete_name, complete_name,
@@ -959,14 +962,14 @@ bool gen_list_impls(type_descriptor_t const *const type_descriptor,
   char *const destructor_call =
       render_destructor_call(type_descriptor, "value", true);
   if (destructor_call != NULL) {
-    fprintf(out, "    %s\n", destructor_call);
+    fprintf(out, "      %s\n", destructor_call);
     free(destructor_call);
   }
-  fputs("        return false;\n"
-          "    }\n"
-          "  }\n"
-          "  yaml_event_delete(&event);\n"
-          "  return true;\n}\n", out);
+  fputs("      return false;\n"
+        "    }\n"
+        "  }\n"
+        "  yaml_event_delete(&event);\n"
+        "  return true;\n}\n", out);
 
   if (type_descriptor->type.kind != CXType_Unexposed) {
     fprintf(out, "%s {\n", type_descriptor->destructor_decl);
@@ -1309,8 +1312,8 @@ static enum CXChildVisitResult tagged_visitor
             "      return false;\n"
             "  }\n"
             "  if (tag[0] != '!' || tag[1] == '\\0') {\n", info->out);
-      fputs("    loader->expected = malloc(sizeof(typename));\n"
-            "    if (loader->expected == NULL) {\n"
+      fputs("    loader->error_info.expected = malloc(sizeof(typename));\n"
+            "    if (loader->error_info.expected == NULL) {\n"
             "      loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;\n"
             "      yaml_event_delete(cur);\n"
             "    } else {\n"
@@ -1327,8 +1330,8 @@ static enum CXChildVisitResult tagged_visitor
               enum_descriptor->converter_decl + sizeof(CONVERTER_PREFIX),
               info->field_name);
       fputs("  if (!res) {\n"
-            "    loader->expected = malloc(sizeof(typename));\n"
-            "    if (loader->expected == NULL) {\n"
+            "    loader->error_info.expected = malloc(sizeof(typename));\n"
+            "    if (loader->error_info.expected == NULL) {\n"
             "      loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;\n"
             "      yaml_event_delete(cur);\n"
             "    } else {\n"
@@ -1377,8 +1380,8 @@ static bool gen_tagged_impls
   if (seen_empty_variants) {
     fputs("      if (cur->type != YAML_SCALAR_EVENT ||\n"
           "          (cur->data.scalar.value[0] != '\\0')) {\n"
-          "        loader->expected = malloc(sizeof(typename));\n"
-          "        if (loader->expected == NULL) {\n"
+          "        loader->error_info.expected = malloc(sizeof(typename));\n"
+          "        if (loader->error_info.expected == NULL) {\n"
           "          loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;\n"
           "          yaml_event_delete(cur);\n"
           "        } else {\n"
@@ -1549,13 +1552,14 @@ static void process_struct_loaders(struct_dfa_t const *const dea,
               "            yaml_event_delete(&key);\n"
               "            ret = false;\n"
               "          } else {\n"
-              "          ", i, index, index);
+              "            ", i, index, index);
       fputs(dea->nodes[i]->loader_implementation, out);
       fprintf(out,
               "            if (ret) {\n"
               "              yaml_event_delete(&event);\n"
               "            } else {\n"
               "              found[%zu] = false;\n"
+              "            }\n"
               "           }\n"
               "        }\n"
               "        break;\n", index);
@@ -1628,6 +1632,7 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
         "    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\n"
         "    loader->error_info.event = *cur;\n"
         "    loader->error_info.expected_event_type = YAML_MAPPING_START_EVENT;\n"
+        "    return false;\n"
         "  }\n"
         "  yaml_event_t key;\n"
         "  if (yaml_parser_parse(&loader->parser, &key) == 0) {\n"
@@ -1733,13 +1738,13 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
           "          loader->error_info.type = YAML_LOADER_ERROR_MISSING_KEY;\n"
           "          memcpy(loader->error_info.expected, names[i], missing_len);\n"
           "          loader->error_info.event = *cur;\n"
-          "          ret = false;\n"
           "        }\n"
+          "        ret = false;\n"
           "        break;\n"
           "      }\n"
           "    }\n"
           "  } else yaml_event_delete(cur);\n"
-          "  if (ret) {\n", out);
+          "  if (!ret) {\n", out);
     process_struct_cleanup(&dea, out);
     fputs("  }\n", out);
   }
@@ -1884,8 +1889,7 @@ bool gen_enum_impls
           type_descriptor->converter_decl + sizeof(CONVERTER_PREFIX));
   fputs("    return true;\n"
         "  } else {\n"
-        "    loader->error_info.type = YAML_LOADER_ERROR_VALUE;\n"
-        "    loader->error_info.event = *cur;\n", out);
+        "    loader->error_info.type = YAML_LOADER_ERROR_VALUE;\n", out);
   fprintf(out,
         "    const char typename[] = \"%s\";\n", type_descriptor->spelling);
   fputs("    loader->error_info.expected = malloc(sizeof(typename));\n"
@@ -1954,7 +1958,8 @@ static void mark_as_predefined(type_descriptor_t *const descriptor) {
   type_descriptor_t desc = {\
     .constructor_decl = "bool " #constructor,\
     .constructor_name_len = sizeof(#constructor),\
-    .destructor_decl = NULL, .destructor_name_len = 0};\
+    .destructor_decl = NULL, .destructor_name_len = 0,\
+    .spelling = #name};\
   mark_as_predefined(&desc);\
   add_predefined(&types_list, #name, desc);\
 }
@@ -2077,7 +2082,7 @@ int main(int const argc, char const *argv[]) {
           "    loader->error_info.type = YAML_LOADER_ERROR_PARSER;\n"
           "    return false;\n"
           "  }\n"
-          "  bool ret = %.*s(value, &loader->parser, &event);\n"
+          "  bool ret = %.*s(value, loader, &event);\n"
           "  if (ret) {\n"
           "    yaml_event_delete(&event);\n"
           "    if (yaml_parser_parse(&loader->parser, &event) == 0) {\n"
@@ -2121,6 +2126,7 @@ int main(int const argc, char const *argv[]) {
   }
   fprintf(header_out,
           "#include <yaml.h>\n"
+          "#include <yaml_loader.h>\n"
           "#include <%s>\n", config.input_file_name);
   if (space == NULL) {
     fprintf(header_out, "bool load_one_%s(%s *value, yaml_loader_t *loader);\n"

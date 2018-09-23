@@ -22,7 +22,7 @@ bool yaml_loader_init_string(yaml_loader_t *loader, const unsigned char *input,
 /**
  * Destroys a loader that has successfully been initialized.
  */
-void yaml_loader_destroy(yaml_loader_t *loader) {
+void yaml_loader_delete(yaml_loader_t *loader) {
   yaml_parser_delete(&loader->parser);
   switch (loader->error_info.type) {
     case YAML_LOADER_ERROR_TAG:

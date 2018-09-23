@@ -2,7 +2,7 @@
 #include <simple_loading.h>
 #include <stdbool.h>
 
-#include <yaml.h>
+#include <yaml_loader.h>
 #include <../common/test_common.h>
 
 static const char* input =
@@ -23,16 +23,17 @@ static const char* input =
     "toggle: true";
 
 int main(int argc, char* argv[]) {
-  yaml_parser_t parser;
-  yaml_parser_initialize(&parser);
-  yaml_parser_set_input_string(&parser, (const unsigned char*)input, strlen(input));
+  yaml_loader_t loader;
+  yaml_loader_init_string(&loader, (const unsigned char*)input, strlen(input));
+
   struct root data;
-  char* ret = load_one_struct__root(&data, &parser);
-  yaml_parser_delete(&parser);
+  bool ret = load_one_struct__root(&data, &loader);
 
   static const char* gender_repr[] = {"male", "female", "other"};
-  if (ret) {
-    fprintf(stderr, "error while loading YAML:\n%s\n", ret);
+  if (!ret) {
+    fprintf(stderr, "error while loading YAML.\n");
+    yaml_loader_delete(&loader);
+
     return 1;
   } else {
     bool success = true;
@@ -53,6 +54,8 @@ int main(int argc, char* argv[]) {
     ASSERT_EQUALS_ENUM(OTHER, data.people.data[2].gender, success, gender_repr);
     ASSERT_EQUALS_INT(75, data.people.data[2].age, success);
     ASSERT_EQUALS_FLOAT(0.91, data.people.data[2].height, success);
+
+    yaml_loader_delete(&loader);
 
     return success ? 0 : 1;
   }

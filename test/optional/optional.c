@@ -2,7 +2,7 @@
 #include <optional_loading.h>
 #include <stdbool.h>
 
-#include <yaml.h>
+#include <yaml_loader.h>
 #include <../common/test_common.h>
 
 static const char* input =
@@ -14,19 +14,18 @@ static const char* input =
     "optional_string: klaatu barada nikto";
 
 int main(int argc, char* argv[]) {
-  yaml_parser_t parser;
-  yaml_parser_initialize(&parser);
-  yaml_parser_set_input_string(&parser, (const unsigned char*)input, strlen(input));
+  yaml_loader_t loader;
+  yaml_loader_init_string(&loader, (const unsigned char*)input, strlen(input));
   struct root data1, data2;
-  char* ret1 = load_one_struct__root(&data1, &parser);
-  char* ret2 = load_one_struct__root(&data2, &parser);
-  yaml_parser_delete(&parser);
+  bool ret1 = load_one_struct__root(&data1, &loader);
+  bool ret2 = load_one_struct__root(&data2, &loader);
+  yaml_loader_delete(&loader);
 
   if (ret1) {
-    fprintf(stderr, "error while loading YAML:\n%s\n", ret1);
+    fprintf(stderr, "error while loading YAML doc #1.");
     return 1;
   } else if (ret2) {
-    fprintf(stderr, "error while loading YAML:\n%s\n", ret2);
+    fprintf(stderr, "error while loading YAML doc #2.");
     return 1;
   } else {
     bool success = true;
