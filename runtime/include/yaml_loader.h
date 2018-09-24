@@ -91,7 +91,14 @@ typedef struct {
    * The YAML parser used for loading. May be used to inquire about details of
    * YAML parser errors. Do not call YAML functionality on this directly.
    */
-  yaml_parser_t parser;
+  yaml_parser_t *parser;
+
+  /**
+   * private values, do not touch
+   */
+  struct {
+    bool external_parser;
+  } internal;
 } yaml_loader_t;
 
 /**
@@ -108,6 +115,16 @@ bool yaml_loader_init_file(yaml_loader_t *loader, FILE *input);
  */
 bool yaml_loader_init_string(yaml_loader_t *loader, const unsigned char *input,
                              size_t size);
+
+/**
+ * Initialize the given loader to use the given parser. The parser may already
+ * have read documents successfully, the next event must be a document start or
+ * a stream start event.
+ *
+ * If the loader is initialized with this function, it will not delete the
+ * parser on deletion!
+ */
+bool yaml_loader_init_parser(yaml_loader_t *loader, yaml_parser_t *parser);
 
 /**
  * Destroys a loader that has successfully been initialized.

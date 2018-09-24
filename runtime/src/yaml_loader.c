@@ -1,21 +1,36 @@
 #include <yaml_loader.h>
 
 bool yaml_loader_init_file(yaml_loader_t *loader, FILE *input) {
-  if (yaml_parser_initialize(&loader->parser) == 0) {
+  loader->parser = malloc(sizeof(yaml_parser_t));
+  if (loader->parser == NULL) return false;
+  if (yaml_parser_initialize(loader->parser) == 0) {
+    free(loader->parser);
     return false;
   }
-  yaml_parser_set_input_file(&loader->parser, input);
+  yaml_parser_set_input_file(loader->parser, input);
   loader->error_info.type = YAML_LOADER_ERROR_NONE;
+  loader->internal.external_parser = false;
   return true;
 }
 
 bool yaml_loader_init_string(yaml_loader_t *loader, const unsigned char *input,
                              size_t size) {
-  if (yaml_parser_initialize(&loader->parser) == 0) {
+  loader->parser = malloc(sizeof(yaml_parser_t));
+  if (loader->parser == NULL) return false;
+  if (yaml_parser_initialize(loader->parser) == 0) {
+    free(loader->parser);
     return false;
   }
-  yaml_parser_set_input_string(&loader->parser, input, size);
+  yaml_parser_set_input_string(loader->parser, input, size);
   loader->error_info.type = YAML_LOADER_ERROR_NONE;
+  loader->internal.external_parser = false;
+  return true;
+}
+
+bool yaml_loader_init_parser(yaml_loader_t *loader, yaml_parser_t *parser) {
+  loader->parser = parser;
+  loader->error_info.type = YAML_LOADER_ERROR_NONE;
+  loader->internal.external_parser = true;
   return true;
 }
 
@@ -23,7 +38,10 @@ bool yaml_loader_init_string(yaml_loader_t *loader, const unsigned char *input,
  * Destroys a loader that has successfully been initialized.
  */
 void yaml_loader_delete(yaml_loader_t *loader) {
-  yaml_parser_delete(&loader->parser);
+  if (!loader->internal.external_parser) {
+    yaml_parser_delete(loader->parser);
+    free(loader->parser);
+  }
   switch (loader->error_info.type) {
     case YAML_LOADER_ERROR_TAG:
     case YAML_LOADER_ERROR_VALUE:
