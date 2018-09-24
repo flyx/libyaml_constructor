@@ -203,7 +203,7 @@ Now, having those, we write our main procedure:
 #include "simple.h"
 #include <simple_loading.h>
 
-#include <yaml.h>
+#include <yaml_loader.h>
 
 static const char* input =
     "symbol: W\n"
@@ -220,13 +220,12 @@ static const char* input =
     "foo: !int 42\n";
 
 int main(int argc, char* argv[]) {
-  yaml_parser_t parser;
-  yaml_parser_initialize(&parser);
-  yaml_parser_set_input_string(&parser, (const unsigned char*)input, strlen(input));
+  yaml_loader_t loader;
+  yaml_loader_init_string(&loader, (const unsigned char*)input, strlen(input));
   struct root data;
-  char* ret = load_one_struct__root(&data, &parser);
-  if (ret) {
-    fprintf(stderr, "error while loading YAML:\n%s\n", ret);
+  bool success = load_one_struct__root(&data, &loader);
+  if (!success) {
+    fprintf(stderr, "error while loading YAML.");
     return 1;
   } else {
     printf("symbol = %c\nPersons:\n", data.symbol);
@@ -234,7 +233,7 @@ int main(int argc, char* argv[]) {
       struct person* item = &data.people.data[i];
       printf("  %s, age %i\n", item->name, item->age);
     }
-    yaml_parser_delete(&parser);
+    yaml_loader_delete(&loader);
     free_one_struct__root(&data);
     return 0;
   }
