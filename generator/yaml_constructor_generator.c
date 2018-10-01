@@ -93,7 +93,9 @@ typedef struct {
 
 #define CONSTRUCTOR_PREFIX "bool"
 #define CONVERTER_PREFIX "static bool"
-#define DESTRUCTOR_PREFIX "static void"
+#define DESTRUCTOR_PREFIX "void"
+#define LOADER_PREFIX "yaml_load_"
+#define DEALLOCATOR_PREFIX "yaml_free_"
 
 /*
  * Describes a type of an entity, like a struct field. In addition to the
@@ -673,15 +675,15 @@ static enum CXChildVisitResult discover_types
  */
 static void write_decls(types_list_t const *const list, FILE *const out) {
   static const char constructor_template[] =
-      CONSTRUCTOR_PREFIX " construct_%s(%s *const value, "
+      CONSTRUCTOR_PREFIX " yaml_construct_%s(%s *const value, "
       "yaml_loader_t *const loader, yaml_event_t *cur)";
   static const char elaborated_constructor_template[] =
-      CONSTRUCTOR_PREFIX " construct_%.*s__%s(%s *const value, "
+      CONSTRUCTOR_PREFIX " yaml_construct_%.*s_%s(%s *const value, "
       "yaml_loader_t *const loader, yaml_event_t *cur)";
   static const char destructor_template[] =
-      DESTRUCTOR_PREFIX " delete_%s(%s *const value)";
+      DESTRUCTOR_PREFIX " yaml_delete_%s(%s *const value)";
   static const char elaborated_destructor_template[] =
-      DESTRUCTOR_PREFIX " delete_%.*s__%s(%s *const value)";
+      DESTRUCTOR_PREFIX " yaml_delete_%.*s_%s(%s *const value)";
   for (size_t i = 0; i < list->count; ++i) {
     if (list->data[i].type.kind == CXType_Unexposed) {
       // predefined type; do not generate anything
@@ -690,9 +692,9 @@ static void write_decls(types_list_t const *const list, FILE *const out) {
     char const *const type_name =
         clang_getCString(clang_getTypeSpelling(list->data[i].type));
     const char *const space = strchr(type_name, ' ');
+    list->data[i].constructor_name_len =
+        strlen(type_name) + sizeof("yaml_construct_") - 1;
     if (space == NULL) {
-      list->data[i].constructor_name_len =
-          strlen(type_name) + sizeof("construct_") - 1;
       list->data[i].constructor_decl =
           malloc(sizeof(constructor_template) - 4 + strlen(type_name) * 2);
       sprintf(list->data[i].constructor_decl, constructor_template,
@@ -703,15 +705,13 @@ static void write_decls(types_list_t const *const list, FILE *const out) {
         list->data[i].destructor_decl = NULL;
       } else {
         list->data[i].destructor_name_len =
-            strlen(type_name) + sizeof("delete_") - 1;
+            strlen(type_name) + sizeof("yaml_delete_") - 1;
         list->data[i].destructor_decl =
             malloc(sizeof(destructor_template) - 4 + strlen(type_name) * 2);
         sprintf(list->data[i].destructor_decl, destructor_template,
                 type_name, type_name);
       }
     } else {
-      list->data[i].constructor_name_len =
-          strlen(type_name) + sizeof("construct_");
       list->data[i].constructor_decl =
           malloc(sizeof(elaborated_constructor_template) - 8 +
                  strlen(type_name) * 2 - 1);
@@ -723,7 +723,7 @@ static void write_decls(types_list_t const *const list, FILE *const out) {
         list->data[i].destructor_decl = NULL;
       } else {
         list->data[i].destructor_name_len =
-            strlen(type_name) + sizeof("delete_");
+            strlen(type_name) + sizeof("yaml_delete_") - 1;
         list->data[i].destructor_decl =
             malloc(sizeof(elaborated_destructor_template) - 8 +
                    strlen(type_name) * 2 - 1);
@@ -737,24 +737,36 @@ static void write_decls(types_list_t const *const list, FILE *const out) {
       fputs(list->data[i].destructor_decl, out);
       fputs(";\n", out);
     }
+  }
+}
 
+static void write_static_decls(types_list_t const *const list,
+                               FILE *const out) {
+  for (size_t i = 0; i < list->count; ++i) {
+    if (list->data[i].type.kind == CXType_Unexposed) {
+      // predefined type; do not generate anything
+      continue;
+    }
+    char const *const type_name =
+        clang_getCString(clang_getTypeSpelling(list->data[i].type));
+    const char *const space = strchr(type_name, ' ');
     if (list->data[i].type.kind == CXType_Enum) {
       static const char converter_template[] =
           CONVERTER_PREFIX " convert_to_%s(const char *const value, "
           "%s *const result)";
       static const char elaborated_converter_template[] =
-          CONVERTER_PREFIX " convert_to_%.*s__%s(const char *const value, "
+          CONVERTER_PREFIX " convert_to_%.*s_%s(const char *const value, "
           "%s *const result)";
       if (space == NULL) {
         list->data[i].converter_name_len = strlen(type_name) +
-            sizeof("convert_to_") + 1;
+                                           sizeof("convert_to_") - 1;
         list->data[i].converter_decl =
             malloc(sizeof(converter_template) - 4 + strlen(type_name) * 2);
         sprintf(list->data[i].converter_decl, converter_template, type_name,
                 type_name);
       } else {
         list->data[i].converter_name_len =
-            strlen(type_name) + sizeof("construct_") + 1;
+            strlen(type_name) + sizeof("convert_to_") - 1;
         list->data[i].converter_decl =
             malloc(sizeof(elaborated_converter_template) - 8 +
                    strlen(type_name) * 2 - 1);
@@ -2027,6 +2039,41 @@ int main(int const argc, char const *argv[]) {
     return 1;
   }
   type_descriptor_t const *const root_type = &types_list.data[root_index];
+  char const *const type_spelling =
+      clang_getCString(clang_getTypeSpelling(root_type->type));
+  const char *const space = strchr(type_spelling, ' ');
+
+
+  FILE *const header_out = fopen(config.output_header_path, "w");
+  if (header_out == NULL) {
+    fprintf(stderr, "unable to open '%s' for writing.\n",
+            config.output_header_path);
+    return 1;
+  }
+  fprintf(header_out,
+          "#include <yaml.h>\n"
+          "#include <yaml_loader.h>\n"
+          "#include <%s>\n", config.input_file_name);
+  fputs("\n/* main functions for loading / deallocating the root type */\n\n",
+        header_out);
+  if (space == NULL) {
+    fprintf(header_out,
+            "bool " LOADER_PREFIX "%s(%s *value, yaml_loader_t *loader);\n"
+            "void " DEALLOCATOR_PREFIX "%s(%s *value);\n",
+            type_spelling, type_spelling, type_spelling, type_spelling);
+  } else {
+    fprintf(header_out,
+            "bool " LOADER_PREFIX
+                "%.*s_%s(%s *value, yaml_loader_t *loader);\n"
+            "void " DEALLOCATOR_PREFIX "%.*s_%s(%s *value);\n",
+            (int)(space - type_spelling), type_spelling, space + 1,
+            type_spelling, (int)(space - type_spelling), type_spelling,
+            space + 1, type_spelling);
+  }
+  fputs("\n/* low-level functions; "
+        "only necessary when writing custom constructors */\n\n", header_out);
+  write_decls(&types_list, header_out);
+  fclose(header_out);
 
   FILE *const out_impl = fopen(config.output_impl_path, "w");
   if (out_impl == NULL) {
@@ -2041,18 +2088,17 @@ int main(int const argc, char const *argv[]) {
           "#include <stdint.h>\n"
           "#include \"%s\"\n", config.output_header_name);
 
-  write_decls(&types_list, out_impl);
+  write_static_decls(&types_list, out_impl);
   if (!write_impls(&types_list, out_impl)) return 1;
 
-  char const *const type_spelling =
-      clang_getCString(clang_getTypeSpelling(root_type->type));
-  const char *const space = strchr(type_spelling, ' ');
   if (space == NULL) {
-    fprintf(out_impl, "bool load_one_%s(%s *value, yaml_loader_t *loader) {\n",
+    fprintf(out_impl, "bool " LOADER_PREFIX
+                          "%s(%s *value, yaml_loader_t *loader) {\n",
             type_spelling, type_spelling);
   } else {
     fprintf(out_impl,
-            "bool load_one_%.*s__%s(%s *value, yaml_loader_t *loader) {\n",
+            "bool " LOADER_PREFIX
+                "%.*s_%s(%s *value, yaml_loader_t *loader) {\n",
             (int)(space - type_spelling), type_spelling, space + 1,
             type_spelling);
   }
@@ -2104,43 +2150,19 @@ int main(int const argc, char const *argv[]) {
       render_destructor_call(root_type, "value", true);
   if (space == NULL) {
     fprintf(out_impl,
-            "void free_one_%s(%s *value) {\n"
+            "void " DEALLOCATOR_PREFIX "%s(%s *value) {\n"
             "  %s\n"
             "}\n", type_spelling, type_spelling,
             destructor_call == NULL ? "" : destructor_call);
   } else {
     fprintf(out_impl,
-            "void free_one_%.*s__%s(%s *value) {\n"
+            "void " DEALLOCATOR_PREFIX "%.*s_%s(%s *value) {\n"
             "  %s\n"
             "}\n", (int)(space - type_spelling), type_spelling, space + 1,
             type_spelling, destructor_call == NULL ? "" : destructor_call);
   }
   if (destructor_call != NULL) free(destructor_call);
   fclose(out_impl);
-
-  FILE *const header_out = fopen(config.output_header_path, "w");
-  if (header_out == NULL) {
-    fprintf(stderr, "unable to open '%s' for writing.\n",
-            config.output_header_path);
-    return 1;
-  }
-  fprintf(header_out,
-          "#include <yaml.h>\n"
-          "#include <yaml_loader.h>\n"
-          "#include <%s>\n", config.input_file_name);
-  if (space == NULL) {
-    fprintf(header_out, "bool load_one_%s(%s *value, yaml_loader_t *loader);\n"
-                        "void free_one_%s(%s *value);\n",
-            type_spelling, type_spelling, type_spelling, type_spelling);
-  } else {
-    fprintf(header_out,
-            "bool load_one_%.*s__%s(%s *value, yaml_loader_t *loader);\n"
-            "void free_one_%.*s__%s(%s *value);\n",
-            (int)(space - type_spelling), type_spelling, space + 1,
-            type_spelling, (int)(space - type_spelling), type_spelling,
-            space + 1, type_spelling);
-  }
-  fclose(header_out);
 
   clang_disposeTranslationUnit(unit);
   clang_disposeIndex(index);

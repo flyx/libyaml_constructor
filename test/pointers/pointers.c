@@ -13,7 +13,7 @@ int main(int argc, char* argv[]) {
   yaml_loader_t loader;
   yaml_loader_init_string(&loader, (const unsigned char*)input, strlen(input));
   struct root data;
-  bool ret = load_one_struct__root(&data, &loader);
+  bool ret = yaml_load_struct_root(&data, &loader);
   yaml_loader_delete(&loader);
 
   if (!ret) {

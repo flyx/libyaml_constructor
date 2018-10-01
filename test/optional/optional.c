@@ -17,8 +17,8 @@ int main(int argc, char* argv[]) {
   yaml_loader_t loader;
   yaml_loader_init_string(&loader, (const unsigned char*)input, strlen(input));
   struct root data1, data2;
-  bool ret1 = load_one_struct__root(&data1, &loader);
-  bool ret2 = load_one_struct__root(&data2, &loader);
+  bool ret1 = yaml_load_struct_root(&data1, &loader);
+  bool ret2 = yaml_load_struct_root(&data2, &loader);
   yaml_loader_delete(&loader);
 
   if (ret1) {
