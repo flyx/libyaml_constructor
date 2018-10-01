@@ -21,10 +21,10 @@ int main(int argc, char* argv[]) {
   bool ret2 = yaml_load_struct_root(&data2, &loader);
   yaml_loader_delete(&loader);
 
-  if (ret1) {
+  if (!ret1) {
     fprintf(stderr, "error while loading YAML doc #1.");
     return 1;
-  } else if (ret2) {
+  } else if (!ret2) {
     fprintf(stderr, "error while loading YAML doc #2.");
     return 1;
   } else {

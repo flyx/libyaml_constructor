@@ -29,10 +29,14 @@ cmdline_result_t process_cmdline_args(int argc, const char* argv[],
   config->root_name = NULL;
   const char* output_name = NULL;
   config->input_file_path = NULL;
+  config->first_clang_param = argc;
 
   for (int i = 1; i < argc; ++i) {
     if (argv[i][0] == '-') {
-      if (i == argc - 1 && argv[i][1] != 'h') {
+      if (argv[i][1] == '\0') {
+        config->first_clang_param = i + 1;
+        break;
+      } else if (i == argc - 1 && argv[i][1] != 'h') {
         fprintf(stderr, "switch %s is missing value!\n", argv[i]);
         usage(argv[0]);
         return ARGS_ERROR;

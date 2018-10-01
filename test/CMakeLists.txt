@@ -3,7 +3,7 @@ enable_testing()
 function(test_case directory name)
   add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${directory}_loading.h
       ${CMAKE_CURRENT_BINARY_DIR}/${directory}_loading.c
-      COMMAND yaml_constructor_generator ${CMAKE_CURRENT_SOURCE_DIR}/${directory}/${directory}.h
+      COMMAND yaml_constructor_generator ${CMAKE_CURRENT_SOURCE_DIR}/${directory}/${directory}.h - -I "${PROJECT_SOURCE_DIR}/runtime/include"
       DEPENDS yaml_constructor_generator ${directory}/${directory}.h
       WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
   add_executable(${directory} ${directory}/${directory}.h ${directory}/${directory}.c
@@ -26,3 +26,4 @@ test_case(simple "Simple")
 test_case(variants "Tagged Unions")
 test_case(pointers "Pointer Types")
 test_case(optional "Optional Fields")
+test_case(custom-constructor "Custom Constructor")

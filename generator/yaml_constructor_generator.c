@@ -85,17 +85,25 @@ typedef struct {
    */
   bool tagged;
   /*
+   * Type is custom, i.e. has a constructor and destructor defined by the user.
+   * constructor and destructor must be declared in the input.
+   */
+  bool custom;
+  /*
    * Type is a actually a pointer to the type_descriptor_t.type. Field value
    * gets allocated during loading.
    */
   ptr_kind pointer;
 } type_flags_t;
 
-#define CONSTRUCTOR_PREFIX "bool"
-#define CONVERTER_PREFIX "static bool"
-#define DESTRUCTOR_PREFIX "void"
+#define CONSTRUCTOR_PREAMBLE "bool"
+#define CONVERTER_PREAMBLE "static bool"
+#define DESTRUCTOR_PREAMBLE "void"
 #define LOADER_PREFIX "yaml_load_"
 #define DEALLOCATOR_PREFIX "yaml_free_"
+#define CONSTRUCTOR_PREFIX "yaml_construct_"
+#define CONVERTER_PREFIX "convert_to_"
+#define DESTRUCTOR_PREFIX "yaml_delete_"
 
 /*
  * Describes a type of an entity, like a struct field. In addition to the
@@ -115,7 +123,7 @@ typedef struct {
    */
   type_flags_t flags;
   /*
-   * Declaration of the constructor function, starting with CONSTRUCTOR_PREFIX.
+   * Declaration of the constructor function, starting with CONSTRUCTOR_PREAMBLE.
    * May be NULL if the type does not have a constructor (only valid for
    * atomic types).
    */
@@ -241,7 +249,8 @@ typedef enum {
   ANN_OPTIONAL = 5,
   ANN_OPTIONAL_STRING = 6,
   ANN_IGNORED = 7,
-  ANN_ENUM_END = 8
+  ANN_CUSTOM = 8,
+  ANN_ENUM_END = 9
 } annotation_kind_t;
 
 /*
@@ -256,6 +265,11 @@ typedef struct {
   char *param;
 } annotation_t;
 
+typedef struct {
+  char const **data;
+  size_t count, capacity;
+} names_list_t;
+
 // ---- States for discovering types ----
 
 /*
@@ -266,6 +280,10 @@ typedef struct {
    * List of discovered types.
    */
   types_list_t *list;
+  /*
+   * List of discovered names of custom constructors and destructors
+   */
+  names_list_t constructor_names, destructor_names;
   /*
    * The last discovered type. Used to discover that a following typedef
    * contains the recent type's definition. In that case, a possible annotation
@@ -311,11 +329,11 @@ typedef struct {
 
 static char const *const annotation_names[] = {
     "", "string", "list", "tagged", "repr", "optional", "optional_string",
-    "ignored"
+    "ignored", "custom"
 };
 
 static bool const annotation_has_param[] = {
-    false, false, false, false, true, false, false
+    false, false, false, false, true, false, false, false
 };
 
 /*
@@ -481,6 +499,7 @@ static bool gen_type_descriptor(CXCursor const cursor, CXType const type,
   result->type = type;
   result->flags.list = (annotation->kind == ANN_LIST);
   result->flags.tagged = (annotation->kind == ANN_TAGGED);
+  result->flags.custom = (annotation->kind == ANN_CUSTOM);
   result->flags.pointer = (annotation->kind == ANN_OPTIONAL) ?
       PTR_OPTIONAL_VALUE : (annotation->kind == ANN_STRING) ? PTR_STRING_VALUE :
                            (annotation->kind == ANN_OPTIONAL_STRING) ?
@@ -498,6 +517,7 @@ static bool equal_type_descriptors(type_descriptor_t const left,
   return clang_equalTypes(left.type, right.type) &&
          left.flags.list == right.flags.list &&
          left.flags.tagged == right.flags.tagged &&
+         left.flags.custom == right.flags.custom &&
          left.flags.pointer == right.flags.pointer;
 }
 
@@ -551,6 +571,23 @@ static size_t add_predefined(types_list_t *const types_list,
 #define TYPE_DISCOVERY_ERROR \
     do {type_info->list->got_error = true;\
         return CXChildVisit_Break; } while (false)
+
+#define APPEND(list, ptr) do { \
+  if ((list)->count == (list)->capacity) { \
+    void* const newlist = malloc(sizeof(*(list)->data) * (list)->capacity * 2);\
+    if (newlist == NULL) {\
+			(ptr) = NULL;\
+    } else {\
+      memcpy(newlist, (list)->data, sizeof(*(list)->data) * (list)->capacity); \
+      free((list)->data); \
+      (list)->data = newlist; \
+      (list)->capacity *= 2; \
+      (ptr) = &((list)->data[(list)->count++]); \
+    }\
+  } else {\
+	  (ptr) = &((list)->data[(list)->count++]); \
+  }\
+} while (false)
 
 /*
  * Recursively walks through the defined types and adds them to the type_info
@@ -658,9 +695,30 @@ static enum CXChildVisitResult discover_types
         } else {
           return CXChildVisit_Recurse;
         }
+      case CXCursor_FunctionDecl: {
+        const char *name = clang_getCString(clang_getCursorSpelling(cursor));
+        if (strncmp(CONSTRUCTOR_PREFIX, name,
+                    sizeof(CONSTRUCTOR_PREFIX) - 1) == 0) {
+          char const **ptr;
+          APPEND(&type_info->constructor_names, ptr);
+          if (ptr != NULL) (*ptr) = name;
+          // TODO: ensure that the function is properly typed
+        } else if (strncmp(DESTRUCTOR_PREFIX, name,
+                           sizeof(DESTRUCTOR_PREFIX) - 1) == 0) {
+          char const **ptr;
+          APPEND(&type_info->destructor_names, ptr);
+          if (ptr != NULL) (*ptr) = name;
+          // TODO: ensure that the function is properly typed
+        } else {
+          print_error(cursor, "unsupported function (expected constructor or "
+                              "destructor): %s\n", name);
+          TYPE_DISCOVERY_ERROR;
+        }
+        break;
+      }
       default:
         print_error(cursor, "unsupported element: \"%s\"\n",
-                    clang_getCursorKindSpelling(cursor.kind));
+                    clang_getCString(clang_getCursorKindSpelling(cursor.kind)));
         TYPE_DISCOVERY_ERROR;
     }
   } else {
@@ -673,17 +731,18 @@ static enum CXChildVisitResult discover_types
  * Write declarations of constructors, destructors and converters of the types
  * in the given list to the given file.
  */
-static void write_decls(types_list_t const *const list, FILE *const out) {
+static bool write_decls(type_info_t const *const info, FILE *const out) {
+  const types_list_t *list = info->list;
   static const char constructor_template[] =
-      CONSTRUCTOR_PREFIX " yaml_construct_%s(%s *const value, "
+      CONSTRUCTOR_PREAMBLE " " CONSTRUCTOR_PREFIX "%s(%s *const value, "
       "yaml_loader_t *const loader, yaml_event_t *cur)";
   static const char elaborated_constructor_template[] =
-      CONSTRUCTOR_PREFIX " yaml_construct_%.*s_%s(%s *const value, "
+      CONSTRUCTOR_PREAMBLE " " CONSTRUCTOR_PREFIX "%.*s_%s(%s *const value, "
       "yaml_loader_t *const loader, yaml_event_t *cur)";
   static const char destructor_template[] =
-      DESTRUCTOR_PREFIX " yaml_delete_%s(%s *const value)";
+      DESTRUCTOR_PREAMBLE " " DESTRUCTOR_PREFIX "%s(%s *const value)";
   static const char elaborated_destructor_template[] =
-      DESTRUCTOR_PREFIX " yaml_delete_%.*s_%s(%s *const value)";
+      DESTRUCTOR_PREAMBLE " " DESTRUCTOR_PREFIX "%.*s_%s(%s *const value)";
   for (size_t i = 0; i < list->count; ++i) {
     if (list->data[i].type.kind == CXType_Unexposed) {
       // predefined type; do not generate anything
@@ -693,7 +752,7 @@ static void write_decls(types_list_t const *const list, FILE *const out) {
         clang_getCString(clang_getTypeSpelling(list->data[i].type));
     const char *const space = strchr(type_name, ' ');
     list->data[i].constructor_name_len =
-        strlen(type_name) + sizeof("yaml_construct_") - 1;
+        strlen(type_name) + sizeof(CONSTRUCTOR_PREFIX) - 1;
     if (space == NULL) {
       list->data[i].constructor_decl =
           malloc(sizeof(constructor_template) - 4 + strlen(type_name) * 2);
@@ -705,7 +764,7 @@ static void write_decls(types_list_t const *const list, FILE *const out) {
         list->data[i].destructor_decl = NULL;
       } else {
         list->data[i].destructor_name_len =
-            strlen(type_name) + sizeof("yaml_delete_") - 1;
+            strlen(type_name) + sizeof(DESTRUCTOR_PREFIX) - 1;
         list->data[i].destructor_decl =
             malloc(sizeof(destructor_template) - 4 + strlen(type_name) * 2);
         sprintf(list->data[i].destructor_decl, destructor_template,
@@ -723,13 +782,52 @@ static void write_decls(types_list_t const *const list, FILE *const out) {
         list->data[i].destructor_decl = NULL;
       } else {
         list->data[i].destructor_name_len =
-            strlen(type_name) + sizeof("yaml_delete_") - 1;
+            strlen(type_name) + sizeof(DESTRUCTOR_PREFIX) - 1;
         list->data[i].destructor_decl =
             malloc(sizeof(elaborated_destructor_template) - 8 +
                    strlen(type_name) * 2 - 1);
         sprintf(list->data[i].destructor_decl, elaborated_destructor_template,
                 (int) (space - type_name), type_name, space + 1, type_name);
       }
+    }
+    if (list->data[i].flags.custom) {
+      const char *name = list->data[i].constructor_decl +
+                         sizeof(CONSTRUCTOR_PREAMBLE);
+      bool found = false;
+      for (size_t j = 0; j < info->constructor_names.count; ++j) {
+        const size_t len = strlen(info->constructor_names.data[j]);
+        if (len == list->data[i].constructor_name_len &&
+            strncmp(name, info->constructor_names.data[j], len) == 0) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        print_error(clang_getTypeDeclaration(list->data[i].type),
+                    "missing constructor for custom type!\n");
+        return false;
+      }
+
+      if (list->data[i].destructor_decl != NULL) {
+        name = list->data[i].destructor_decl + sizeof(DESTRUCTOR_PREAMBLE);
+        found = false;
+        for (size_t j = 0; j < info->destructor_names.count; ++j) {
+          const size_t len = strlen(info->destructor_names.data[j]);
+          if (len == list->data[i].destructor_name_len &&
+              strncmp(name, info->destructor_names.data[j], len) == 0) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          print_error(clang_getTypeDeclaration(list->data[i].type),
+                      "missing destructor for custom type!\n");
+          return false;
+        }
+      }
+
+      // don't write anything; user has declared constructor and destructor
+      continue;
     }
     fputs(list->data[i].constructor_decl, out);
     fputs(";\n", out);
@@ -738,6 +836,7 @@ static void write_decls(types_list_t const *const list, FILE *const out) {
       fputs(";\n", out);
     }
   }
+  return true;
 }
 
 static void write_static_decls(types_list_t const *const list,
@@ -746,27 +845,30 @@ static void write_static_decls(types_list_t const *const list,
     if (list->data[i].type.kind == CXType_Unexposed) {
       // predefined type; do not generate anything
       continue;
+    } else if (list->data[i].flags.custom) {
+      // custom type; user has declared constructor and destructor.
+      continue;
     }
     char const *const type_name =
         clang_getCString(clang_getTypeSpelling(list->data[i].type));
     const char *const space = strchr(type_name, ' ');
     if (list->data[i].type.kind == CXType_Enum) {
       static const char converter_template[] =
-          CONVERTER_PREFIX " convert_to_%s(const char *const value, "
+          CONVERTER_PREAMBLE " " CONVERTER_PREFIX "%s(const char *const value, "
           "%s *const result)";
       static const char elaborated_converter_template[] =
-          CONVERTER_PREFIX " convert_to_%.*s_%s(const char *const value, "
-          "%s *const result)";
+          CONVERTER_PREAMBLE " " CONVERTER_PREFIX
+          "%.*s_%s(const char *const value, %s *const result)";
       if (space == NULL) {
         list->data[i].converter_name_len = strlen(type_name) +
-                                           sizeof("convert_to_") - 1;
+                                           sizeof(CONVERTER_PREFIX) - 1;
         list->data[i].converter_decl =
             malloc(sizeof(converter_template) - 4 + strlen(type_name) * 2);
         sprintf(list->data[i].converter_decl, converter_template, type_name,
                 type_name);
       } else {
         list->data[i].converter_name_len =
-            strlen(type_name) + sizeof("convert_to_") - 1;
+            strlen(type_name) + sizeof(CONVERTER_PREFIX) - 1;
         list->data[i].converter_decl =
             malloc(sizeof(elaborated_converter_template) - 8 +
                    strlen(type_name) * 2 - 1);
@@ -878,7 +980,7 @@ static char *render_destructor_call
   if (type_descriptor->destructor_decl != NULL) {
     cur += sprintf(ret, "%.*s(%s%s);",
         (int)type_descriptor->destructor_name_len,
-        type_descriptor->destructor_decl + sizeof(DESTRUCTOR_PREFIX),
+        type_descriptor->destructor_decl + sizeof(DESTRUCTOR_PREAMBLE),
         (type_descriptor->flags.pointer != PTR_NONE || is_ref) ? "" : "&",
                    subject);
   }
@@ -970,7 +1072,7 @@ bool gen_list_impls(type_descriptor_t const *const type_descriptor,
           "    if (!ret) {\n",
           complete_name, complete_name,
           (int)inner_type->constructor_name_len,
-          inner_type->constructor_decl + sizeof(CONSTRUCTOR_PREFIX));
+          inner_type->constructor_decl + sizeof(CONSTRUCTOR_PREAMBLE));
   char *const destructor_call =
       render_destructor_call(type_descriptor, "value", true);
   if (destructor_call != NULL) {
@@ -1032,7 +1134,7 @@ static char *gen_deserialization(char const *const name,
                                  type_descriptor_t const *const type_descriptor,
                                  char const *const event_ref) {
   return new_deserialization
-      (name, type_descriptor->constructor_decl + sizeof(CONSTRUCTOR_PREFIX),
+      (name, type_descriptor->constructor_decl + sizeof(CONSTRUCTOR_PREAMBLE),
        type_descriptor->constructor_name_len, event_ref,
        type_descriptor->flags.pointer != PTR_NONE);
 }
@@ -1339,7 +1441,7 @@ static enum CXChildVisitResult tagged_visitor
       fprintf(info->out,
               "  bool res = %.*s((const char*)(tag + 1), &value->%s);\n",
               (int)enum_descriptor->converter_name_len,
-              enum_descriptor->converter_decl + sizeof(CONVERTER_PREFIX),
+              enum_descriptor->converter_decl + sizeof(CONVERTER_PREAMBLE),
               info->field_name);
       fputs("  if (!res) {\n"
             "    loader->error_info.expected = malloc(sizeof(typename));\n"
@@ -1898,7 +2000,7 @@ bool gen_enum_impls
   fprintf(out,
         "  if (%.*s((const char*)cur->data.scalar.value, value)) {\n",
           (int)type_descriptor->converter_name_len,
-          type_descriptor->converter_decl + sizeof(CONVERTER_PREFIX));
+          type_descriptor->converter_decl + sizeof(CONVERTER_PREAMBLE));
   fputs("    return true;\n"
         "  } else {\n"
         "    loader->error_info.type = YAML_LOADER_ERROR_VALUE;\n", out);
@@ -1927,7 +2029,8 @@ static bool write_impls(types_list_t const *const list,
                         FILE *const out) {
   for (size_t i = 0; i < list->count; ++i) {
     type_descriptor_t const *const type_descriptor = &list->data[i];
-    if (type_descriptor->type.kind == CXType_Unexposed) continue;
+    if (type_descriptor->type.kind == CXType_Unexposed ||
+        type_descriptor->flags.custom) continue;
     switch(clang_getCanonicalType(type_descriptor->type).kind) {
       case CXType_Record:
         if (type_descriptor->flags.list) {
@@ -1984,10 +2087,17 @@ int main(int const argc, char const *argv[]) {
     case ARGS_SUCCESS: break;
   }
 
-  char const *const args[] = {"-std=c11"};
+  char const **clang_args =
+      malloc((argc - config.first_clang_param + 1) * sizeof(char*));
+  clang_args[0] = "-std=c11";
+  for (size_t i = 1; i <= argc - config.first_clang_param; ++i) {
+    clang_args[i] = argv[i + config.first_clang_param - 1];
+  }
+
   CXIndex index = clang_createIndex(0, 1);
   CXTranslationUnit unit =
-      clang_parseTranslationUnit(index, config.input_file_path, args, 1,
+      clang_parseTranslationUnit(index, config.input_file_path, clang_args,
+                                 argc - config.first_clang_param + 1,
                                  NULL, 0, CXTranslationUnit_None);
   if (unit == NULL) {
     fprintf(stderr, "Unable to parse '%s'.\n", config.input_file_path);
@@ -2022,7 +2132,11 @@ int main(int const argc, char const *argv[]) {
   KNOWN_TYPE(char, yaml_construct_char);
   KNOWN_TYPE(_Bool, yaml_construct_bool);
 
-  type_info_t type_info = {.list = &types_list};
+  type_info_t type_info = {.list = &types_list,
+      .constructor_names = {.data = malloc(16 * sizeof(char*)),
+          .count = 0, .capacity = 16},
+      .destructor_names = {.data = malloc(16 * sizeof(char*)),
+          .count = 0, .capacity = 16}};
   type_info.recent_annotation.kind = ANN_NONE;
   type_info.recent_annotation.param = NULL;
   type_info.recent_def.kind = CXType_Unexposed;
@@ -2072,7 +2186,7 @@ int main(int const argc, char const *argv[]) {
   }
   fputs("\n/* low-level functions; "
         "only necessary when writing custom constructors */\n\n", header_out);
-  write_decls(&types_list, header_out);
+  if (!write_decls(&type_info, header_out)) return 1;
   fclose(header_out);
 
   FILE *const out_impl = fopen(config.output_impl_path, "w");
@@ -2145,7 +2259,7 @@ int main(int const argc, char const *argv[]) {
           "  setlocale(LC_NUMERIC, old_locale);\n"
           "  return ret;\n"
           "}\n", (int)root_type->constructor_name_len,
-          root_type->constructor_decl + sizeof(CONSTRUCTOR_PREFIX));
+          root_type->constructor_decl + sizeof(CONSTRUCTOR_PREAMBLE));
   char *const destructor_call =
       render_destructor_call(root_type, "value", true);
   if (space == NULL) {

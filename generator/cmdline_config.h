@@ -10,6 +10,7 @@ typedef struct {
   const char *output_header_name;
   const char *input_file_path;
   const char *input_file_name;
+  int first_clang_param;
 } cmdline_config_t;
 
 typedef enum {
