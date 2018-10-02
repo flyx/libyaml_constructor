@@ -1425,8 +1425,8 @@ static enum CXChildVisitResult tagged_visitor
             "      loader->error_info.expected_event_type = YAML_SCALAR_EVENT;\n"
             "      return false;\n"
             "  }\n"
-            "  if (tag[0] != '!' || tag[1] == '\\0') {\n", info->out);
-      fputs("    loader->error_info.expected = malloc(sizeof(typename));\n"
+            "  if (tag == NULL || tag[0] != '!' || tag[1] == '\\0') {\n"
+            "    loader->error_info.expected = malloc(sizeof(typename));\n"
             "    if (loader->error_info.expected == NULL) {\n"
             "      loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;\n"
             "      yaml_event_delete(cur);\n"
@@ -1660,21 +1660,19 @@ static void process_struct_loaders(struct_dfa_t const *const dea,
               "          }\n"
               "          ret = false;\n"
               "        } else {\n"
-              "          found[%zu] = true;\n"
               "          if (yaml_parser_parse(loader->parser, &event) == 0) {\n"
               "            loader->error_info.type = YAML_LOADER_ERROR_PARSER;\n"
               "            yaml_event_delete(&key);\n"
               "            ret = false;\n"
               "          } else {\n"
-              "            ", i, index, index);
+              "            ", i, index);
       fputs(dea->nodes[i]->loader_implementation, out);
       fprintf(out,
               "            if (ret) {\n"
               "              yaml_event_delete(&event);\n"
-              "            } else {\n"
-              "              found[%zu] = false;\n"
+              "              found[%zu] = true;\n"
               "            }\n"
-              "           }\n"
+              "          }\n"
               "        }\n"
               "        break;\n", index);
       index++;
@@ -1694,8 +1692,9 @@ static void process_struct_cleanup(struct_dfa_t const *const dea,
       fprintf(out,
               "    if (found[%zu]) {\n"
               "      %s\n"
-              "    }\n", index++, dea->nodes[i]->destructor_implementation);
+              "    }\n", index, dea->nodes[i]->destructor_implementation);
     }
+    if (dea->nodes[i]->loader_implementation != NULL) ++index;
   }
 }
 
