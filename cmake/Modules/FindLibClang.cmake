@@ -6,12 +6,11 @@ else()
   set(LibClang_DLL "${LibClang_ROOT}/bin/libclang.dll")
 endif()
 
-find_path(LibClang_INCLUDE_DIR clang-c/Index.h PATHS ${PROJECT_SOURCE_DIR}/contrib)
+find_path(LibClang_INCLUDE_DIRS NAMES clang-c/Index.h HINTS ${PROJECT_SOURCE_DIR}/contrib)
 
 set(LibClang_LIBRARIES ${LibClang_LIBRARY})
-set(LibClang_INCLUDE_DIRS ${LibClang_INCLUDE_DIR})
 
 include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(LibClang DEFAULT_MSG LibClang_LIBRARY LibClang_INCLUDE_DIR)
+find_package_handle_standard_args(LibClang DEFAULT_MSG LibClang_LIBRARY LibClang_INCLUDE_DIRS)
 
 mark_as_advanced(LibClang_INCLUDE_DIR LibClang_LIBRARY)
