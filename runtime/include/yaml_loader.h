@@ -94,6 +94,13 @@ typedef struct {
   yaml_parser_t *parser;
 
   /**
+   * Field that allows you to store a data pointer for usage in custom
+   * constructor functions. This field will never be touched by the runtime or
+   * generated code.
+   */
+  void *data;
+
+  /**
    * private values, do not touch
    */
   struct {
