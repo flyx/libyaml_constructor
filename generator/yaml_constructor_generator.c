@@ -2068,7 +2068,7 @@ static void mark_as_predefined(type_descriptor_t *const descriptor) {
 
 #define KNOWN_TYPE(name, constructor) {\
   /* disabled because it requires a reference to the runtime in the generator */ \
-  /*(void)&(constructor); /* ensure constructor exists */\
+  /*(void)&(constructor); // ensure constructor exists */\
   type_descriptor_t desc = {\
     .constructor_decl = "bool " #constructor,\
     .constructor_name_len = sizeof(#constructor),\
