@@ -61,32 +61,6 @@ static size_t digits_count(size_t i) {
 	return n;
 }
 
-char* yaml_constructor_render_error(yaml_event_t *event, const char *message,
-	size_t expected_param_length, ...) {
-	static const char pos_template[] = "l. %zu, c. %zu: ";
-	size_t expected_pos_len = sizeof(pos_template) - 7 + // placeholder + terminator
-		digits_count(event->start_mark.line + 1) +
-		digits_count(event->start_mark.column + 1);
-	char* buffer = malloc(expected_pos_len + expected_param_length +
-		strlen(message) + 1);
-	int pos_len = sprintf(buffer, pos_template, event->start_mark.line,
-		event->start_mark.column);
-	assert(pos_len == expected_pos_len);
-	va_list args;
-	va_start(args, expected_param_length);
-	vsprintf(buffer + expected_pos_len, message, args);
-	va_end(args);
-	return buffer;
-}
-
-char* yaml_constructor_wrong_event_error(yaml_event_type_t expected,
-	yaml_event_t* actual) {
-	return yaml_constructor_render_error(actual,
-		"expected %s, got %s", 14 + 14,
-		yaml_constructor_event_spelling(expected),
-		yaml_constructor_event_spelling(actual->type));
-}
-
 #define DEFINE_INT_CONSTRUCTOR(name, value_type, min, max)\
 bool name(value_type *const value, yaml_loader_t *const loader,\
                   yaml_event_t *cur) {\
