@@ -37,12 +37,6 @@ char* yaml_constructor_escape(const char* const string, size_t* const size);
 
 const char* yaml_constructor_event_spelling(yaml_event_type_t type);
 
-char* yaml_constructor_render_error(yaml_event_t *event, const char *message,
-	size_t expected_param_length, ...);
-
-char* yaml_constructor_wrong_event_error(yaml_event_type_t expected,
-	yaml_event_t* actual);
-
 bool yaml_construct_short(short *const value,
 	yaml_loader_t *const loader, yaml_event_t *cur);
 
