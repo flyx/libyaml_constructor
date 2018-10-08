@@ -50,6 +50,7 @@ void yaml_loader_delete(yaml_loader_t *loader) {
     case YAML_LOADER_ERROR_STRUCTURAL:
     case YAML_LOADER_ERROR_DUPLICATE_KEY:
     case YAML_LOADER_ERROR_UNKNOWN_KEY:
+    case YAML_LOADER_ERROR_CUSTOM_CONSTRUCTOR:
       yaml_event_delete(&loader->error_info.event);
       break;
     case YAML_LOADER_ERROR_NONE:

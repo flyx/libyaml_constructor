@@ -11,12 +11,12 @@ typedef enum {
   /**
    * No error occurred.
    */
-  YAML_LOADER_ERROR_NONE,
+  YAML_LOADER_ERROR_NONE = 0,
   /**
    * A parser error occurred, i.e. there is an error in the input syntax.
    * Use the yaml_parser_t structure to obtain details on the error.
    */
-  YAML_LOADER_ERROR_PARSER,
+  YAML_LOADER_ERROR_PARSER = 1,
   /**
    * The YAML structure looks different than expected: A certain event type has
    * been expected, but a different event type has been encountered.
@@ -24,44 +24,51 @@ typedef enum {
    * event will be set to the violating event. expected will be
    * set to the event type that was expected in place of the actual event.
    */
-  YAML_LOADER_ERROR_STRUCTURAL,
+  YAML_LOADER_ERROR_STRUCTURAL = 2,
   /**
    * A key in a YAML mapping has been given twice.
    *
    * event will be set to the second key.
    */
-  YAML_LOADER_ERROR_DUPLICATE_KEY,
+  YAML_LOADER_ERROR_DUPLICATE_KEY = 3,
   /**
    * A key in a YAML mapping is missing, but is required to be there.
    *
    * event will be set to the mapping start event, expected will be set to the
    * name of the missing key.
    */
-  YAML_LOADER_ERROR_MISSING_KEY,
+  YAML_LOADER_ERROR_MISSING_KEY = 4,
   /**
    * A given key in a YAML mapping cannot be mapped to a struct field.
    *
    * event will be set to the unknown key.
    */
-  YAML_LOADER_ERROR_UNKNOWN_KEY,
+  YAML_LOADER_ERROR_UNKNOWN_KEY = 5,
   /**
    * The recent event has an invalid tag or misses a mandatory tag.
    *
    * event will be set to the violating event, expected_type to the name
    * of the expected type.
    */
-  YAML_LOADER_ERROR_TAG,
+  YAML_LOADER_ERROR_TAG = 6,
   /**
    * The value of a YAML scalar value cannot be parsed into the expected type.
    *
    * event will be set to the violating event, expected to the
    * expected type.
    */
-  YAML_LOADER_ERROR_VALUE,
+  YAML_LOADER_ERROR_VALUE = 7,
   /**
    * Allocating memory has failed.
    */
-  YAML_LOADER_ERROR_OUT_OF_MEMORY
+  YAML_LOADER_ERROR_OUT_OF_MEMORY = 8,
+  /**
+   * A user-defined error in a custom constructor has been encountered.
+   *
+   * event must be set to the event at which the error occurred. Other
+   * information must be transported via the data field.
+   */
+  YAML_LOADER_ERROR_CUSTOM_CONSTRUCTOR = 9
 } yaml_loader_error_type_t;
 
 typedef struct {
