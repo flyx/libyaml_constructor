@@ -409,18 +409,17 @@ static bool get_annotation(CXCursor const cursor,
     while (*pos != ' ' && *pos != '\r' && *pos != '\n' && *pos != '\0' &&
            *pos != '\t') pos++;
     while (*pos == ' ' || *pos == '\t') pos++;
-    if (*pos == '\r' || *pos == '\n' || *pos == '\0') {
-      print_error(cursor, "annotation \"%.*s\" is missing its parameter!\n",
-                  pos - start, start);
-      return false;
-    }
     char const *param_start = pos;
-    do {pos++;} while (*pos != ' ' && *pos != '\r' && *pos != '\n' &&
-                       *pos != '\0');
-    size_t const param_len = pos - param_start;
-    annotation->param = malloc(param_len + 1);
-    memcpy(annotation->param, param_start, param_len);
-    annotation->param[param_len] = '\0';
+    if (*pos == '\r' || *pos == '\n' || *pos == '\0') {
+      annotation->param = NULL;
+    } else {
+      do { pos++; } while (*pos != ' ' && *pos != '\r' && *pos != '\n' &&
+        *pos != '\0');
+      size_t const param_len = pos - param_start;
+      annotation->param = malloc(param_len + 1);
+      memcpy(annotation->param, param_start, param_len);
+      annotation->param[param_len] = '\0';
+    }
   } else {
     annotation->kind = ANN_NONE;
     annotation->param = NULL;
