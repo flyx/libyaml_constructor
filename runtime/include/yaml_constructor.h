@@ -35,6 +35,10 @@ char* yaml_constructor_escape(const char* const string, size_t* const size);
   }\
 } while (false)
 
+// the maximum string length (excluding null terminator) returned by
+// yaml_constructor_event_spelling
+#define YAML_CONSTRUCTOR_EVENT_SPELLING_MAX_LENGTH 14
+
 const char* yaml_constructor_event_spelling(yaml_event_type_t type);
 
 bool yaml_construct_short(short *const value,
