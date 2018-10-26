@@ -601,9 +601,18 @@ static enum CXChildVisitResult discover_types
   }
   type_info_t *const type_info = (type_info_t *) client_data;
 
+  CXType const type = clang_getCursorType(cursor);
   CXCursor const canonical = clang_getCanonicalCursor(cursor);
-  if (clang_equalCursors(cursor, canonical)) {
-    CXType const type = clang_getCursorType(cursor);
+  bool discover_current = clang_equalCursors(cursor, canonical) != 0;
+  if (!discover_current) {
+    // may still need to process this type if we didn't already.
+    if (!clang_Location_isFromMainFile(clang_getCursorLocation(canonical))) {
+      int const type_index = find(&type_info->list->names,
+                                  clang_getCString(clang_getTypeSpelling(type)));
+      discover_current = type_index == -1;
+    }
+  }
+  if (discover_current) {
     char const *const type_name =
         clang_getCString(clang_getCursorSpelling(cursor));
     switch (cursor.kind) {
@@ -1027,7 +1036,8 @@ bool gen_list_impls(type_descriptor_t const *const type_descriptor,
       clang_getCString(clang_getTypeSpelling(info.data_type));
   int const type_index = find(&types_list->names, complete_name);
   if (type_index == -1) {
-    print_error(clang_getTypeDeclaration(info.data_type), "Unknown type!");
+    print_error(clang_getTypeDeclaration(info.data_type),
+                "Unknown type: \"%s\"\n", complete_name);
     return false;
   }
   type_descriptor_t const *const inner_type =
