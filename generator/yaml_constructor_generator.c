@@ -621,7 +621,9 @@ static enum CXChildVisitResult discover_types
           annotation_t annotation;
           if (!get_annotation(cursor, &annotation))
             TYPE_DISCOVERY_ERROR;
-          if (annotation.kind != ANN_IGNORED) {
+          if (annotation.kind == ANN_IGNORED) {
+            return CXChildVisit_Continue;
+          } else {
             int const index = add_type(type_info, type, cursor);
             if (index == -1) TYPE_DISCOVERY_ERROR;
             if (index != -2 &&
@@ -629,8 +631,8 @@ static enum CXChildVisitResult discover_types
               print_error(cursor, "duplicate type name: \"%s\"\n", type_name);
               TYPE_DISCOVERY_ERROR;
             }
-            // don't search for types inside custom types; they are not required
-            // to be supported.
+            // don't search for types inside custom types; they are
+            // not required to be supported.
             if (annotation.kind == ANN_CUSTOM) return CXChildVisit_Continue;
           }
         }
