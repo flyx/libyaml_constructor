@@ -41,6 +41,8 @@ List of stuff that currently does not work:
  * anonymous structs inside structs
  * reading the documentation (there is none apart from this Readme)
 
+**The documentation in this readme is usually outdated.**
+
 ## Usage
 
     yaml_constructor_generator [options] file
@@ -82,6 +84,18 @@ The following annotations exist:
    may be omitted in the YAML, in which case it will be `NULL` after loading.
  * `optional_string`: for `char*` fields, works like `optional` but if given,
    parses into a null-terminated string.
+ * `ignored`: for types that should be ignored while parsing the header
+   file. Mind that these types may not be used for fields of any type
+   for which deserialization code should be generated.
+ * `custom`: for types that have user-defined constructors and
+   deallocators. The user-defined functions must be declared in the
+   header and must have the same name and signature that would be
+   generated if the functions were to be auto-generated.
+ * `default`: for fields of value types. Tells the generator that this
+   field may be omitted in the YAML, in which case it will have a
+   default value depending on the type. Default values are 0 for all
+   signed and unsigned integer types, and an empty list for struct types
+   tagged with `list`. Other types may not use the `default` tag.
 
 ## Building
 
@@ -223,7 +237,7 @@ int main(int argc, char* argv[]) {
   yaml_loader_t loader;
   yaml_loader_init_string(&loader, (const unsigned char*)input, strlen(input));
   struct root data;
-  bool success = load_one_struct__root(&data, &loader);
+  bool success = yaml_load_struct_root(&data, &loader);
   if (!success) {
     fprintf(stderr, "error while loading YAML.");
     return 1;

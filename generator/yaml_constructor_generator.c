@@ -68,6 +68,13 @@ typedef enum {
   PTR_OBJECT_POINTER
 } ptr_kind;
 
+typedef enum {
+  NO_DEFAULT,
+  DEFAULT_INT,
+  DEFAULT_FLOAT,
+  DEFAULT_LIST
+} default_kind;
+
 /*
  * These flags describe the usage of a type.
  * They may be local to a struct field or similar entity.
@@ -89,6 +96,11 @@ typedef struct {
    * constructor and destructor must be declared in the input.
    */
   bool custom;
+  /*
+   * Type has a default value, i.e. it is allowed to leave out a value for a
+   * field of this type, and that field will then take the default value.
+   */
+  default_kind default_value;
   /*
    * Type is a actually a pointer to the type_descriptor_t.type. Field value
    * gets allocated during loading.
@@ -177,6 +189,10 @@ typedef struct {
 
 // -------- DFA for node fields ---------
 
+typedef enum {
+  REQUIRED, OPTIONAL, HAS_DEFAULT
+} occurrence_kind;
+
 /*
  * A node of the node field DFA.
  */
@@ -198,13 +214,15 @@ typedef struct {
    */
   char *destructor_implementation;
   /*
+   * iff this value is a final node, this may contain assignments that need to
+   * be made in case the field is not assigned a value. That assignments are a
+   * list and NULL-terminated.
+   */
+  char **default_implementation;
+  /*
    * contains the name of the field iff this is a final node.
    */
   const char *loader_item_name;
-  /*
-   * true iff this is a final node and the value is declared as optional.
-   */
-  bool optional;
 } struct_dfa_node_t;
 
 /*
@@ -250,7 +268,8 @@ typedef enum {
   ANN_OPTIONAL_STRING = 6,
   ANN_IGNORED = 7,
   ANN_CUSTOM = 8,
-  ANN_ENUM_END = 9
+  ANN_DEFAULT = 9,
+  ANN_ENUM_END = 10
 } annotation_kind_t;
 
 /*
@@ -329,11 +348,11 @@ typedef struct {
 
 static char const *const annotation_names[] = {
     "", "string", "list", "tagged", "repr", "optional", "optional_string",
-    "ignored", "custom"
+    "ignored", "custom", "default"
 };
 
 static bool const annotation_has_param[] = {
-    false, false, false, false, true, false, false, false
+    false, false, false, false, true, false, false, false, false
 };
 
 /*
@@ -1116,7 +1135,7 @@ bool gen_list_impls(type_descriptor_t const *const type_descriptor,
       }
       fputs("  }\n", out);
     }
-    fputs("  free(value->data);\n}\n", out);
+    fputs("  if (value->data != NULL) free(value->data);\n}\n", out);
   }
   return true;
 }
@@ -1177,6 +1196,7 @@ static enum describe_field_result_t describe_field
   if (!success) return ERROR;
   ptr_kind pointer_kind = PTR_OBJECT_POINTER;
   ptr_kind str_pointer_kind = PTR_STRING_VALUE;
+  bool should_have_default = false;
   switch (annotation.kind) {
     case ANN_IGNORED: return IGNORED;
     case ANN_OPTIONAL_STRING:
@@ -1205,6 +1225,7 @@ static enum describe_field_result_t describe_field
       } else {
         ret->flags.list = false;
         ret->flags.tagged = false;
+        ret->flags.default_value = NO_DEFAULT;
         ret->flags.pointer = str_pointer_kind;
         ret->constructor_decl = NULL;
         ret->constructor_name_len = 0;
@@ -1215,47 +1236,90 @@ static enum describe_field_result_t describe_field
         return ADDED;
       }
     }
+    case ANN_DEFAULT:
+      if (t.kind == CXType_Pointer) {
+        print_error(cursor, "!default may not be applied on a pointer type "
+                            "(use !optional instead).");
+        return ERROR;
+      }
+      should_have_default = true;
+      break;
     case ANN_OPTIONAL:
       if (t.kind != CXType_Pointer) {
         print_error(cursor, "!optional must be applied on a pointer type.");
         return ERROR;
       }
       pointer_kind = PTR_OPTIONAL_VALUE;
-      // intentional fall-through
+      break;
     case ANN_NONE:
-      if (t.kind == CXType_Pointer) {
-        CXType const pointee = clang_getPointeeType(t);
-        if (pointee.kind == CXType_Pointer) {
-          print_error(cursor, "pointer to pointer not supported.");
-          return ERROR;
-        }
-        char const *const type_name = clang_getCString(
-            clang_getTypeSpelling(pointee));
-        int const type_index = find(&types_list->names, type_name);
-        if (type_index == -1) {
-          print_error(cursor, "Unknown type: %s", type_name);
-          return ERROR;
-        }
-        *ret = types_list->data[type_index];
-        ret->flags.pointer = pointer_kind;
-        ret->spelling = type_name;
-        return ADDED;
-      } else {
-        char const *const type_name =
-            clang_getCString(clang_getTypeSpelling(t));
-        int const type_index = find(&types_list->names, type_name);
-        if (type_index == -1) {
-          print_error(cursor, "Unknown type: %s", type_name);
-          return ERROR;
-        }
-        *ret = types_list->data[type_index];
-        ret->spelling = type_name;
-        return ADDED;
-      }
+      break;
     default:
       print_error(cursor, "Annotation '%s' not valid here.",
                   annotation_names[annotation.kind]);
       return ERROR;
+  }
+
+  if (t.kind == CXType_Pointer) {
+    CXType const pointee = clang_getPointeeType(t);
+    if (pointee.kind == CXType_Pointer) {
+      print_error(cursor, "pointer to pointer not supported.");
+      return ERROR;
+    }
+    char const *const type_name = clang_getCString(
+        clang_getTypeSpelling(pointee));
+    int const type_index = find(&types_list->names, type_name);
+    if (type_index == -1) {
+      print_error(cursor, "Unknown type: %s", type_name);
+      return ERROR;
+    }
+    *ret = types_list->data[type_index];
+    ret->flags.pointer = pointer_kind;
+    ret->flags.default_value = NO_DEFAULT;
+    ret->spelling = type_name;
+    return ADDED;
+  } else {
+    char const *const type_name =
+        clang_getCString(clang_getTypeSpelling(t));
+    int const type_index = find(&types_list->names, type_name);
+    if (type_index == -1) {
+      print_error(cursor, "Unknown type: %s", type_name);
+      return ERROR;
+    }
+    *ret = types_list->data[type_index];
+    if (should_have_default) {
+      switch (t.kind) {
+        case CXType_UChar:
+        case CXType_UShort:
+        case CXType_UInt:
+        case CXType_ULong:
+        case CXType_ULongLong:
+        case CXType_SChar:
+        case CXType_Short:
+        case CXType_Int:
+        case CXType_Long:
+        case CXType_LongLong:
+          ret->flags.default_value = DEFAULT_INT;
+          break;
+        case CXType_Float:
+        case CXType_Double:
+          ret->flags.default_value = DEFAULT_FLOAT;
+          break;
+        case CXType_Record:
+          if (ret->flags.list) {
+            ret->flags.default_value = DEFAULT_LIST;
+          } else {
+            print_error(cursor, "type of !default struct must be a list!");
+            return ERROR;
+          }
+          break;
+        default:
+          print_error(cursor, "!default not supported for %s.",
+                      clang_getCString(clang_getTypeSpelling(t)));
+          return ERROR;
+      }
+    } else ret->flags.default_value = NO_DEFAULT;
+    ret->spelling = type_name;
+    return ADDED;
   }
 }
 
@@ -1554,7 +1618,7 @@ static inline struct_dfa_node_t *new_node(char const *const name) {
   val->destructor_implementation = NULL;
   val->loader_item_name = name;
   val->destructor_implementation = NULL;
-  val->optional = false;
+  val->default_implementation = NULL;
   return val;
 }
 
@@ -1628,14 +1692,61 @@ static enum CXChildVisitResult field_visitor
     return CXChildVisit_Break;
   }
 
-  char *const accessor = malloc(strlen(name) + sizeof("value->"));
+  const size_t accessor_len = strlen(name) + sizeof("value->");
+  char *const accessor = malloc(accessor_len);
   sprintf(accessor, "value->%s", name);
   cur_node->destructor_implementation =
       render_destructor_call(&descriptor, accessor, false);
-  free(accessor);
 
-  cur_node->optional = descriptor.flags.pointer == PTR_OPTIONAL_VALUE ||
-      descriptor.flags.pointer == PTR_OPTIONAL_STRING_VALUE;
+  if (descriptor.flags.pointer == PTR_OPTIONAL_VALUE ||
+     descriptor.flags.pointer == PTR_OPTIONAL_STRING_VALUE) {
+    cur_node->default_implementation = malloc(sizeof(char*) * 2);
+    *cur_node->default_implementation =
+        malloc(accessor_len + sizeof(" = NULL;"));
+    sprintf(*cur_node->default_implementation, "%s = NULL;", accessor);
+    cur_node->default_implementation[1] = NULL;
+  } else {
+    switch (descriptor.flags.default_value) {
+      case NO_DEFAULT:
+        cur_node->default_implementation = NULL;
+        break;
+      case DEFAULT_INT:
+        cur_node->default_implementation = malloc(sizeof(char *) * 2);
+        *cur_node->default_implementation =
+            malloc(accessor_len + sizeof(" = 0;"));
+        sprintf(*cur_node->default_implementation, "%s = 0;", accessor);
+        cur_node->default_implementation[1] = NULL;
+        break;
+      case DEFAULT_FLOAT:
+        cur_node->default_implementation = malloc(sizeof(char *) * 2);
+        *cur_node->default_implementation =
+            malloc(accessor_len + sizeof(" = 0.0;"));
+        sprintf(*cur_node->default_implementation, "%s = 0.0;", accessor);
+        cur_node->default_implementation[1] = NULL;
+        break;
+      case DEFAULT_LIST:
+        cur_node->default_implementation = malloc(sizeof(char *) * 4);
+        *cur_node->default_implementation =
+            malloc(accessor_len + sizeof(".data = NULL;"));
+        sprintf(*cur_node->default_implementation, "%s.data = NULL;",
+                accessor);
+        cur_node->default_implementation[1] =
+            malloc(accessor_len + sizeof(".capacity = 0;"));
+        sprintf(cur_node->default_implementation[1], "%s.capacity = 0;",
+                accessor);
+        cur_node->default_implementation[2] =
+            malloc(accessor_len + sizeof(".count = 0;"));
+        sprintf(cur_node->default_implementation[1], "%s.count = 0;",
+                accessor);
+        cur_node->default_implementation[3] = NULL;
+        break;
+      default:
+        print_error(cursor, "internal error; illegal default value");
+        return CXChildVisit_Break;
+    }
+  }
+
+  free(accessor);
   return CXChildVisit_Continue;
 }
 
@@ -1790,13 +1901,17 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
       if (dea.nodes[i]->loader_implementation != NULL) {
         if (first) first = false;
         else fputs(", ", out);
-        fputs(dea.nodes[i]->optional ? "true" : "false", out);
+        fputs(dea.nodes[i]->default_implementation == NULL ? "false" : "true",
+              out);
       }
     }
     fputs("};\n", out);
     for (size_t i = 0; i < dea.count; i++) {
-      if (dea.nodes[i]->optional) {
-        fprintf(out, "  value->%s = NULL;\n", dea.nodes[i]->loader_item_name);
+      if (dea.nodes[i]->default_implementation != NULL) {
+        for (char **line = dea.nodes[i]->default_implementation; *line != NULL;
+             ++line) {
+          fprintf(out, "  %s\n", *line);
+        }
       }
     }
     fputs("  static char const *const names[] = {", out);
