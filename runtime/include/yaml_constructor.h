@@ -19,7 +19,16 @@
 char* yaml_constructor_escape(const char* const string, size_t* const size);
 
 #define YAML_CONSTRUCTOR_APPEND(list, ptr) do { \
-  if ((list)->count == (list)->capacity) { \
+  if ((list)->capacity == 0) {\
+    if ((list)->data != NULL) free ((list)->data);\
+    (list)->data = malloc(sizeof(*(list)->data) * 16);\
+    if ((list)->data == NULL) {\
+      (ptr) = NULL;\
+    } else {\
+      (list)->capacity = 16;\
+      (ptr) = &((list)->data[(list)->count++]);\
+    }\
+  } else if ((list)->count == (list)->capacity) { \
     void* const newlist = malloc(sizeof(*(list)->data) * (list)->capacity * 2);\
     if (newlist == NULL) {\
 			(ptr) = NULL;\
