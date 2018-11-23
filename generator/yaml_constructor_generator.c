@@ -1736,7 +1736,7 @@ static enum CXChildVisitResult field_visitor
                 accessor);
         cur_node->default_implementation[2] =
             malloc(accessor_len + sizeof(".count = 0;"));
-        sprintf(cur_node->default_implementation[1], "%s.count = 0;",
+        sprintf(cur_node->default_implementation[2], "%s.count = 0;",
                 accessor);
         cur_node->default_implementation[3] = NULL;
         break;
