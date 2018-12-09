@@ -1269,7 +1269,7 @@ static enum describe_field_result_t describe_field
         clang_getTypeSpelling(pointee));
     int const type_index = find(&types_list->names, type_name);
     if (type_index == -1) {
-      print_error(cursor, "Unknown type: %s", type_name);
+      print_error(cursor, "Unknown type: %s\n", type_name);
       return ERROR;
     }
     *ret = types_list->data[type_index];
@@ -1282,7 +1282,7 @@ static enum describe_field_result_t describe_field
         clang_getCString(clang_getTypeSpelling(t));
     int const type_index = find(&types_list->names, type_name);
     if (type_index == -1) {
-      print_error(cursor, "Unknown type: %s", type_name);
+      print_error(cursor, "Unknown type: %s\n", type_name);
       return ERROR;
     }
     *ret = types_list->data[type_index];
@@ -2254,7 +2254,7 @@ int main(int const argc, char const *argv[]) {
 
   KNOWN_TYPE(unsigned char, yaml_construct_unsigned_char);
   KNOWN_TYPE(unsigned short, yaml_construct_unsigned_short);
-  KNOWN_TYPE(unsigned, yaml_construct_unsigned);
+  KNOWN_TYPE(unsigned int, yaml_construct_unsigned);
   KNOWN_TYPE(unsigned long, yaml_construct_unsigned_long);
   KNOWN_TYPE(unsigned long long, yaml_construct_unsigned_long_long);
 
