@@ -1010,19 +1010,31 @@ static char *render_destructor_call
   }
   if (type_descriptor->flags.pointer != PTR_NONE) {
     chars_needed += sizeof("free();") - 1 + subject_len;
+    if (type_descriptor->flags.pointer == PTR_OPTIONAL_VALUE ||
+        type_descriptor->flags.pointer == PTR_OPTIONAL_STRING_VALUE) {
+      chars_needed += sizeof("if ( != NULL) {}") - 1 + subject_len;
+    }
   }
   if (chars_needed == 1) return NULL;
   char *const ret = malloc(chars_needed);
   char *cur = ret;
+  if (type_descriptor->flags.pointer == PTR_OPTIONAL_VALUE ||
+      type_descriptor->flags.pointer == PTR_OPTIONAL_STRING_VALUE) {
+    cur += sprintf(cur, "if (%s != NULL) {", subject);
+  }
   if (type_descriptor->destructor_decl != NULL) {
-    cur += sprintf(ret, "%.*s(%s%s);",
+    cur += sprintf(cur, "%.*s(%s%s);",
         (int)type_descriptor->destructor_name_len,
         type_descriptor->destructor_decl + sizeof(DESTRUCTOR_PREAMBLE),
         (type_descriptor->flags.pointer != PTR_NONE || is_ref) ? "" : "&",
                    subject);
   }
   if (type_descriptor->flags.pointer != PTR_NONE) {
-    sprintf(cur, "free(%s);", subject);
+    cur += sprintf(cur, "free(%s);", subject);
+  }
+  if (type_descriptor->flags.pointer == PTR_OPTIONAL_VALUE ||
+      type_descriptor->flags.pointer == PTR_OPTIONAL_STRING_VALUE) {
+    /*cur +=*/ sprintf(cur, "}");
   }
   return ret;
 }
