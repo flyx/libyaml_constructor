@@ -8,9 +8,9 @@
 #include <string.h>
 
 #define YAML_CONSTRUCTOR_WALK(table, name, min, max, result)\
-  int8_t walk__pos = 0;\
+  uint16_t walk__pos = 0;\
   for(unsigned const char* walk__cur = name; *walk__cur != '\0' &&\
-      walk__pos != -1; ++walk__cur) {\
+      walk__pos != UINT16_MAX; ++walk__cur) {\
     walk__pos = (table)[walk__pos][(*walk__cur < (min)) ? 0 :\
         ((*walk__cur > (max)) ? (max) : *walk__cur) - (min)];\
   }\
