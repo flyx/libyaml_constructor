@@ -6,6 +6,8 @@
 #include <stdbool.h>
 #include <string.h>
 #include <clang-c/Index.h>
+#include <assert.h>
+#include <inttypes.h>
 
 #include "cmdline_config.h"
 
@@ -18,10 +20,10 @@
  */
 typedef struct {
   /*
-   * index of the following node for each possible value of char. `-1` means
-   * "no follower".
+   * index of the following node for each possible value of char. `UINT16_MAX`
+   * means "no follower".
    */
-  int followers[256];
+  uint16_t followers[256];
   /*
    * this node is a final node iff type_index != -1. In that case, type_index
    * is the index of the mapped type.
@@ -199,10 +201,10 @@ typedef enum {
  */
 typedef struct {
   /*
-   * index of the following node for each possible value of char. `-1` means
-   * "no follower".
+   * index of the following node for each possible value of char. `UINT16_MAX`
+   * means "no follower".
    */
-  int followers[256];
+  uint16_t followers[256];
   /*
    * iff this node is a final node, this contains the code to load the value of
    * the current field. NULL otherwise.
@@ -456,12 +458,13 @@ static bool add_raw_name(typename_dfa_t *const dfa, char const *const name,
   size_t node_index = 0;
   typename_node_t *node;
   for (const char *cur = name; *cur != '\0'; ++cur) {
-    if (dfa->nodes[node_index]->followers[(size_t) *cur] == -1) {
+    if (dfa->nodes[node_index]->followers[(size_t) *cur] == UINT16_MAX) {
       node = malloc(sizeof(typename_node_t));
-      memset(node->followers, -1, 256 * sizeof(int));
+      memset(node->followers, UINT8_MAX, 256 * sizeof(uint16_t));
       node->type_index = -1;
       size_t const new_index = dfa->count++;
-      dfa->nodes[node_index]->followers[(size_t) *cur] = (int)new_index;
+      assert(new_index < UINT16_MAX);
+      dfa->nodes[node_index]->followers[(size_t) *cur] = (uint16_t)new_index;
       dfa->nodes[new_index] = node;
       node_index = new_index;
     } else {
@@ -492,10 +495,10 @@ static bool add_name(typename_dfa_t *const dfa, CXType const type,
  * type name is unknown.
  */
 static int find(typename_dfa_t const *const dfa, char const *const name) {
-  int node_index = 0;
+  uint16_t node_index = 0;
   for (char const *cur = name; *cur != '\0'; ++cur) {
     node_index = dfa->nodes[node_index]->followers[(size_t) *cur];
-    if (node_index == -1) return -1;
+    if (node_index == UINT16_MAX) return -1;
   }
   return dfa->nodes[node_index]->type_index;
 }
@@ -1648,9 +1651,9 @@ static struct_dfa_node_t *include_name(struct_dfa_t *const dfa,
   for (unsigned char const *cur_char = (unsigned char*)name; *cur_char != '\0';
        ++cur_char) {
     size_t const index = (size_t)(*cur_char);
-    int node_id = cur_node->followers[index];
-    if (node_id == -1) {
-      node_id = (int) dfa->count++;
+    uint16_t node_id = cur_node->followers[index];
+    if (node_id == UINT16_MAX) {
+      node_id = (uint16_t) dfa->count++;
       if (node_id == MAX_NODES) {
         fputs("too many nodes in DEA!\n", stderr);
         return NULL;
@@ -1777,13 +1780,13 @@ static enum CXChildVisitResult field_visitor
  * Render a control table to map field names given as string to field indexes.
  */
 static void put_control_table(struct_dfa_t const *const dea, FILE *const out) {
-  fprintf(out, "  static const int8_t table[][%zu] = {\n",
+  fprintf(out, "  static const uint16_t table[][%zu] = {\n",
           dea->max - dea->min + 3);
   for(size_t i = 0; i < dea->count; ++i) {
     fputs("      {", out);
     for(size_t j = dea->min - 1; j <= dea->max + 1; ++j) {
       if (j > dea->min - 1) fputs(", ", out);
-      fprintf(out, "%d", dea->nodes[i]->followers[j]);
+      fprintf(out, "%"PRIu16, dea->nodes[i]->followers[j]);
     }
     if (i < dea->count - 1) fputs("},\n", out);
     else fputs("}\n", out);
@@ -1955,7 +1958,7 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
           "      ret = false;\n"
           "      break;\n"
           "    }\n"
-          "    int8_t result;\n"
+          "    uint16_t result;\n"
           "    YAML_CONSTRUCTOR_WALK(table, key.data.scalar.value, ", out);
     fprintf(out, "%zu, %zu, result);\n", dea.min - 1, dea.max + 1);
     fputs("    yaml_event_t event;\n"
@@ -2135,7 +2138,7 @@ bool gen_enum_impls
   }
   fprintf(out, "%s {\n", type_descriptor->converter_decl);
   put_control_table(&dea, out);
-  fputs("  int8_t res;\n"
+  fputs("  uint16_t res;\n"
         "  YAML_CONSTRUCTOR_WALK(table, (unsigned char*)value, ", out);
   fprintf(out, "%zu, %zu, res);\n", dea.min - 1, dea.max + 1);
   fputs("  switch(res) {\n", out);
@@ -2266,7 +2269,7 @@ int main(int const argc, char const *argv[]) {
       .count = 0, .capacity = 64, .got_error = false};
   types_list.names.count = 1;
   types_list.names.nodes[0] = malloc(sizeof(typename_node_t));
-  memset(types_list.names.nodes[0]->followers, -1, 256 * sizeof(int));
+  memset(types_list.names.nodes[0]->followers, -1, 256 * sizeof(uint16_t));
   types_list.names.nodes[0]->type_index = -1;
 
   // known types
