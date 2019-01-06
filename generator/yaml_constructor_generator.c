@@ -75,7 +75,8 @@ typedef enum {
   DEFAULT_INT,
   DEFAULT_FLOAT,
   DEFAULT_LIST,
-  DEFAULT_BOOL
+  DEFAULT_BOOL,
+  DEFAULT_ENUM
 } default_kind;
 
 /*
@@ -1331,6 +1332,9 @@ static enum describe_field_result_t describe_field
         case CXType_Bool:
           ret->flags.default_value = DEFAULT_BOOL;
           break;
+        case CXType_Enum:
+          ret->flags.default_value = DEFAULT_ENUM;
+          break;
         default:
           print_error(cursor, "!default not supported for %s.",
                       clang_getCString(clang_getTypeSpelling(t)));
@@ -1750,6 +1754,17 @@ static enum CXChildVisitResult field_visitor
         sprintf(*cur_node->default_implementation, "%s = false;", accessor);
         cur_node->default_implementation[1] = NULL;
         break;
+      case DEFAULT_ENUM: {
+        const char *type_spelling =
+            clang_getCString(clang_getTypeSpelling(descriptor.type));
+        cur_node->default_implementation = malloc(sizeof(char *) * 2);
+        *cur_node->default_implementation =
+            malloc(accessor_len + strlen(type_spelling) + sizeof(" = ()0;"));
+        sprintf(*cur_node->default_implementation, "%s = (%s)0;",
+            accessor, type_spelling);
+        cur_node->default_implementation[1] = NULL;
+        break;
+      }
       case DEFAULT_LIST:
         cur_node->default_implementation = malloc(sizeof(char *) * 4);
         *cur_node->default_implementation =
