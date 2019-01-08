@@ -1322,7 +1322,7 @@ static enum describe_field_result_t describe_field
           if (ret->flags.list) {
             ret->flags.default_value = DEFAULT_LIST;
           } else {
-            print_error(cursor, "type of !default struct must be a list!");
+            print_error(cursor, "type of !default struct must be a list!\n");
             return ERROR;
           }
           break;
@@ -1333,7 +1333,7 @@ static enum describe_field_result_t describe_field
           ret->flags.default_value = DEFAULT_ENUM;
           break;
         default:
-          print_error(cursor, "!default not supported for %s.",
+          print_error(cursor, "!default not supported for %s.\n",
                       clang_getCString(clang_getTypeSpelling(t)));
           return ERROR;
       }

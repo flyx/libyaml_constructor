@@ -64,12 +64,8 @@ static size_t digits_count(size_t i) {
 #define DEFINE_INT_CONSTRUCTOR(name, value_type, min, max)\
 bool name(value_type *const value, yaml_loader_t *const loader,\
                   yaml_event_t *cur) {\
-  if (cur->type != YAML_SCALAR_EVENT) {\
-    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\
-    loader->error_info.event = *cur;\
-    loader->error_info.expected_event_type = YAML_SCALAR_EVENT;\
+  if (!yaml_constructor_check_event_type(loader, cur, YAML_SCALAR_EVENT))\
     return false;\
-  }\
   char* result;\
   long long res = strtoll((const char*)cur->data.scalar.value, &result, 10);\
   if (*result != '\0' || res < min || res > max) {\
@@ -98,12 +94,8 @@ DEFINE_INT_CONSTRUCTOR(yaml_construct_long_long, long long, LLONG_MIN,
 #define DEFINE_UNSIGNED_CONSTRUCTOR(name, value_type, max) \
 bool name(value_type *const value, yaml_loader_t *const loader,\
                   yaml_event_t* cur) {\
-  if (cur->type != YAML_SCALAR_EVENT) {\
-    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\
-    loader->error_info.event = *cur;\
-    loader->error_info.expected_event_type = YAML_SCALAR_EVENT;\
+  if (!yaml_constructor_check_event_type(loader, cur, YAML_SCALAR_EVENT)) \
     return false;\
-  }\
   char* result;\
   unsigned long long res =\
       strtoull((const char*)cur->data.scalar.value, &result, 10);\
@@ -136,12 +128,8 @@ DEFINE_UNSIGNED_CONSTRUCTOR(yaml_construct_unsigned_long_long,
 
  bool yaml_construct_string(char** const value, yaml_loader_t *const loader,
 		yaml_event_t* cur) {
-	if (cur->type != YAML_SCALAR_EVENT) {
-    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;
-    loader->error_info.event = *cur;
-    loader->error_info.expected_event_type = YAML_SCALAR_EVENT;
+  if (!yaml_constructor_check_event_type(loader, cur, YAML_SCALAR_EVENT))
     return false;
-	}
 	size_t len = strlen((char*)cur->data.scalar.value) + 1;
 	*value = malloc(len);
 	if (*value == NULL) {
@@ -155,12 +143,9 @@ DEFINE_UNSIGNED_CONSTRUCTOR(yaml_construct_unsigned_long_long,
 
 bool yaml_construct_char(char *const value, yaml_loader_t *const loader,
                          yaml_event_t* cur) {
-	if (cur->type != YAML_SCALAR_EVENT) {
-    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;
-    loader->error_info.event = *cur;
-    loader->error_info.expected_event_type = YAML_SCALAR_EVENT;
+  if (!yaml_constructor_check_event_type(loader, cur, YAML_SCALAR_EVENT)) {
     return false;
-	} else if (cur->data.scalar.value[0] == '\0' ||
+  } else if (cur->data.scalar.value[0] == '\0' ||
              cur->data.scalar.value[1] != '\0') {
     const char typename[] = "char";
     loader->error_info.expected = malloc(sizeof(typename));
@@ -180,19 +165,13 @@ bool yaml_construct_char(char *const value, yaml_loader_t *const loader,
 
 bool yaml_construct_bool(bool *const value, yaml_loader_t *const loader,
 	yaml_event_t* cur) {
-	if (cur->type != YAML_SCALAR_EVENT) {
-    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;
-    loader->error_info.event = *cur;
-    loader->error_info.expected_event_type = YAML_SCALAR_EVENT;
+  if (!yaml_constructor_check_event_type(loader, cur, YAML_SCALAR_EVENT)) {
     return false;
-	}
-	else if (strcmp("true", (const char*)cur->data.scalar.value) == 0) {
+  } else if (strcmp("true", (const char*)cur->data.scalar.value) == 0) {
 		*value = true;
-	}
-	else if (strcmp("false", (const char*)cur->data.scalar.value) == 0) {
+	} else if (strcmp("false", (const char*)cur->data.scalar.value) == 0) {
 		*value = false;
-	}
-	else {
+	} else {
     const char typename[] = "bool";
     loader->error_info.expected = malloc(sizeof(typename));
     if (loader->error_info.expected == NULL) {
@@ -211,12 +190,8 @@ bool yaml_construct_bool(bool *const value, yaml_loader_t *const loader,
 #define DEFINE_FP_CONSTRUCTOR(name, value_type, overflow, func) \
 bool name(value_type *const value, yaml_loader_t *const loader,\
                   yaml_event_t* cur) {\
-  if (cur->type != YAML_SCALAR_EVENT) {\
-    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\
-    loader->error_info.event = *cur;\
-    loader->error_info.expected_event_type = YAML_SCALAR_EVENT;\
+  if (!yaml_constructor_check_event_type(loader, cur, YAML_SCALAR_EVENT))\
     return false;\
-  }\
   char* end_ptr;\
   *value = func((const char*)cur->data.scalar.value, &end_ptr);\
   if (*end_ptr != '\0' || *value == (overflow)) {\
