@@ -94,8 +94,9 @@ The following annotations exist:
  * `default`: for fields of value types. Tells the generator that this
    field may be omitted in the YAML, in which case it will have a
    default value depending on the type. Default values are 0 for all
-   signed and unsigned integer types, and an empty list for struct types
-   tagged with `list`. Other types may not use the `default` tag.
+   signed and unsigned integer types as well as `enum` types, and an empty
+   list for struct types tagged with `list`. Other types may not use the
+   `default` tag.
 
 ## Building
 
@@ -104,9 +105,16 @@ To build `libyaml_constructor_generator`, you need:
  * A **C** compiler. **libyaml_constructor** is tested and known to work with
    GCC, LLVM/Clang and Visual Studio.
  * [CMake][3], Version 3.10 or later
- * [libclang][1]
+ * [libclang][1]. On macOS, you currently need to install Xcode which bundles
+   libclang (not just the command line utilities which do not) and use
+   `xcode-select` to select it as the active toolchain. You also need to
+   install headers into `/usr/include` via the package located at
+   `/Library/Developer/CommandLineTools/Packages`. This is required for
+   libclang to be able to parse your code. *This may change in the future, but
+   I currently have other worries*.
 
-The tests, as any generated code, also depend on [libyaml][4].
+The tests, as any generated code, also depend on [libyaml][4]
+(quite obviously).
 
 ### Instructions for Windows
 
