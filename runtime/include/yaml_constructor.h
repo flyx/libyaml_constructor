@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include "yaml_loader.h"
 
 #define YAML_CONSTRUCTOR_WALK(table, name, min, max, result)\
   uint16_t walk__pos = 0;\
@@ -43,6 +44,17 @@ char* yaml_constructor_escape(const char* const string, size_t* const size);
 	  (ptr) = &((list)->data[(list)->count++]); \
   }\
 } while (false)
+
+static inline bool yaml_constructor_check_event_type(
+    yaml_loader_t *const loader, yaml_event_t *const event,
+    yaml_event_type_t const expected) {
+  if (event->type != expected) {
+    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;
+    loader->error_info.event = *event;
+    loader->error_info.expected_event_type = expected;
+    return false;
+  } else return true;
+}
 
 // the maximum string length (excluding null terminator) returned by
 // yaml_constructor_event_spelling

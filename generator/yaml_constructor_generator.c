@@ -1082,12 +1082,9 @@ bool gen_list_impls(type_descriptor_t const *const type_descriptor,
       &types_list->data[type_index];
 
   fprintf(out,
-          "  if (cur->type != YAML_SEQUENCE_START_EVENT) {\n"
-          "    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\n"
-          "    loader->error_info.event = *cur;\n"
-          "    loader->error_info.expected_event_type = YAML_SEQUENCE_START_EVENT;\n"
+          "  if (!yaml_constructor_check_event_type(loader, cur, "
+          "YAML_SEQUENCE_START_EVENT))\n"
           "    return false;\n"
-          "  }\n"
           "  value->data = malloc(16 * sizeof(%s));\n"
           "  if (value->data == NULL) {\n"
           "    loader->error_info.type = YAML_LOADER_ERROR_OUT_OF_MEMORY;\n"
@@ -1912,12 +1909,9 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
     free(dea.nodes[0]);
     dea.count = 0;
   }
-  fputs("  if (cur->type != YAML_MAPPING_START_EVENT) {\n"
-        "    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\n"
-        "    loader->error_info.event = *cur;\n"
-        "    loader->error_info.expected_event_type = YAML_MAPPING_START_EVENT;\n"
-        "    return false;\n"
-        "  }\n"
+  fputs("  if (!yaml_constructor_check_event_type(loader, cur, "
+        "YAML_MAPPING_START_EVENT))\n"
+        "    return false;"
         "  yaml_event_t key;\n"
         "  if (yaml_parser_parse(loader->parser, &key) == 0) {\n"
         "    loader->error_info.type = YAML_LOADER_ERROR_PARSER;\n"
@@ -1966,10 +1960,8 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
     }
     fputs("};\n"
           "  while(key.type != YAML_MAPPING_END_EVENT) {\n"
-          "    if (key.type != YAML_SCALAR_EVENT) {\n"
-          "      loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\n"
-          "      loader->error_info.event = key;\n"
-          "      loader->error_info.expected_event_type = YAML_SCALAR_EVENT;\n"
+          "    if (!yaml_constructor_check_event_type(loader, &key, "
+          "YAML_SCALAR_EVENT)) {\n"
           "      ret = false;\n"
           "      break;\n"
           "    }\n"
@@ -2004,10 +1996,8 @@ bool gen_struct_impls(type_descriptor_t const *const type_descriptor,
           "    }\n"
           "  }\n", out);
   } else {
-    fputs("  if (key.type != YAML_MAPPING_END_EVENT) {\n"
-          "    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\n"
-          "    loader->error_info.event = key;\n"
-          "    loader->error_info.expected_event_type = YAML_MAPPING_END_EVENT;\n"
+    fputs("  if (!yaml_constructor_check_event_type(loader, &key, "
+          "YAML_MAPPING_END_EVENT)) {\n"
           "    yaml_event_delete(cur);\n"
           "    return false;\n"
           "  }\n", out);
@@ -2165,12 +2155,9 @@ bool gen_enum_impls
 
   fprintf(out, "%s {\n", type_descriptor->constructor_decl);
   fputs("  (void)loader;\n"
-        "  if (cur->type != YAML_SCALAR_EVENT) {\n"
-        "    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\n"
-        "    loader->error_info.event = *cur;\n"
-        "    loader->error_info.expected_event_type = YAML_SCALAR_EVENT;\n"
-        "    return false;\n"
-        "  }\n", out);
+        "  if (!yaml_constructor_check_event_type(loader, cur, "
+        "YAML_SCALAR_EVENT))\n"
+        "    return false;\n", out);
   fprintf(out,
         "  if (%.*s((const char*)cur->data.scalar.value, value)) {\n",
           (int)type_descriptor->converter_name_len,
@@ -2405,12 +2392,9 @@ int main(int const argc, char const *argv[]) {
           "      return false;\n"
           "    }\n"
           "  }\n"
-          "  if (event.type != YAML_DOCUMENT_START_EVENT) {\n"
-          "    loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\n"
-          "    loader->error_info.event = event;\n"
-          "    loader->error_info.expected_event_type = YAML_DOCUMENT_START_EVENT;\n"
+          "  if (!yaml_constructor_check_event_type(loader, &event, "
+          "YAML_DOCUMENT_START_EVENT))\n"
           "    return false;\n"
-          "  }\n"
           "  yaml_event_delete(&event);\n"
           "  if (yaml_parser_parse(loader->parser, &event) == 0) {\n"
           "    loader->error_info.type = YAML_LOADER_ERROR_PARSER;\n"
@@ -2422,12 +2406,9 @@ int main(int const argc, char const *argv[]) {
           "    if (yaml_parser_parse(loader->parser, &event) == 0) {\n"
           "      loader->error_info.type = YAML_LOADER_ERROR_PARSER;\n"
           "      return false;\n"
-          "    } else if (event.type != YAML_DOCUMENT_END_EVENT) {\n"
-          "      loader->error_info.type = YAML_LOADER_ERROR_STRUCTURAL;\n"
-          "      loader->error_info.event = event;\n"
-          "      loader->error_info.expected_event_type = YAML_DOCUMENT_END_EVENT;\n"
+          "    } else if (!yaml_constructor_check_event_type(loader, &event, "
+          "YAML_DOCUMENT_END_EVENT))\n"
           "      return false;\n"
-          "    }\n"
           "    yaml_event_delete(&event);\n"
           "  }\n"
           "  setlocale(LC_NUMERIC, old_locale);\n"
